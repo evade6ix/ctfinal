@@ -59,6 +59,9 @@ router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const orderIdStr = String(id);
 
+  // ✅ NEW: allow background sync to skip Scryfall calls
+  const skipImages = req.query.skipImages === "1";
+
   try {
     const client = ct();
     console.log("🔎 Fetching order items for order id:", id);
@@ -68,9 +71,7 @@ router.get("/:id", async (req, res) => {
     console.log("✅ CardTrader /orders/:id status:", r.status);
 
     const order = r.data || {};
-    const rawItems = Array.isArray(order.order_items)
-      ? order.order_items
-      : [];
+    const rawItems = Array.isArray(order.order_items) ? order.order_items : [];
 
     console.log("📦 order_items length:", rawItems.length);
 
@@ -86,15 +87,13 @@ router.get("/:id", async (req, res) => {
     }));
 
     // Collect all CT listing IDs
-    const ctIds = baseItems
-      .map((i) => i.cardTraderId)
-      .filter((x) => x != null);
+    const ctIds = baseItems.map((i) => i.cardTraderId).filter((x) => x != null);
 
-    // If nothing has cardTraderId, just do Scryfall and return
+    // If nothing has cardTraderId, just do Scryfall and return (unless skipping)
     if (!ctIds.length) {
       const finalNoBins = await Promise.all(
         baseItems.map(async (it) => {
-          const image_url = await getScryfallImage(it.name);
+          const image_url = skipImages ? null : await getScryfallImage(it.name);
           return { ...it, image_url };
         })
       );
@@ -133,10 +132,10 @@ router.get("/:id", async (req, res) => {
         const ctId = Number(it.cardTraderId);
         const requestedQty = Number(it.quantity) || 0;
 
-        const image_url = await getScryfallImage(it.name);
+        // ✅ Only call Scryfall for UI usage; background sync skips it
+        const image_url = skipImages ? null : await getScryfallImage(it.name);
 
         if (!Number.isFinite(ctId) || requestedQty <= 0) {
-          // No valid product id / quantity
           return {
             ...it,
             image_url,
@@ -147,32 +146,30 @@ router.get("/:id", async (req, res) => {
         // If we already have an allocation for this (order + cardTraderId),
         // reuse it and DON'T re-deduct from inventory.
         const existingAlloc = allocationMap.get(ctId);
-if (existingAlloc) {
-  const binLocations = (existingAlloc.pickedLocations || []).map((pl) => {
-    const binValue =
-      (pl.bin && (pl.bin.label || pl.bin.name)) ||
-      (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
+        if (existingAlloc) {
+          const binLocations = (existingAlloc.pickedLocations || []).map((pl) => {
+            const binValue =
+              (pl.bin && (pl.bin.label || pl.bin.name)) ||
+              (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
 
-    return {
-      bin: binValue,
-      row: pl.row,
-      quantity: pl.quantity,
-    };
-  });
+            return {
+              bin: binValue,
+              row: pl.row,
+              quantity: pl.quantity,
+            };
+          });
 
-  return {
-    ...it,
-    image_url,
-    binLocations,
-  };
-}
-
+          return {
+            ...it,
+            image_url,
+            binLocations,
+          };
+        }
 
         // Otherwise, we need to allocate from inventory *once*
         const invItem = inventoryMap.get(ctId);
 
         if (!invItem || !Array.isArray(invItem.locations)) {
-          // Nothing in our bins for this product
           return {
             ...it,
             image_url,
@@ -181,11 +178,12 @@ if (existingAlloc) {
         }
 
         // Allocate from bins using your strategy (largest qty first)
-        const { pickedLocations, remainingLocations, unfilled } =
-          allocateFromBins(invItem.locations || [], requestedQty);
+        const { pickedLocations, remainingLocations, unfilled } = allocateFromBins(
+          invItem.locations || [],
+          requestedQty
+        );
 
         if (!pickedLocations.length) {
-          // Not enough stock in bins to fulfill any part
           return {
             ...it,
             image_url,
@@ -217,7 +215,7 @@ if (existingAlloc) {
           fulfilledQuantity: fulfilledQty,
           unfilled,
           pickedLocations: pickedLocations.map((pl) => ({
-            bin: pl.bin?._id || pl.bin, // store ObjectId
+            bin: pl.bin?._id || pl.bin,
             row: pl.row,
             quantity: pl.quantity,
           })),
@@ -226,18 +224,17 @@ if (existingAlloc) {
         await allocationDoc.save();
 
         // Build binLocations for UI (with bin name/label + row + qty)
-const binLocations = pickedLocations.map((pl) => {
-  const binValue =
-    (pl.bin && (pl.bin.label || pl.bin.name)) ||
-    (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
+        const binLocations = pickedLocations.map((pl) => {
+          const binValue =
+            (pl.bin && (pl.bin.label || pl.bin.name)) ||
+            (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
 
-  return {
-    bin: binValue,
-    row: pl.row,
-    quantity: pl.quantity,
-  };
-});
-
+          return {
+            bin: binValue,
+            row: pl.row,
+            quantity: pl.quantity,
+          };
+        });
 
         return {
           ...it,

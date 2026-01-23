@@ -107,7 +107,7 @@ async function fetchAllocatedOrdersFromCardTrader() {
 
   let page = 1;
   const limit = 50;
-  const allocatedOrders = [];
+  const eligibleOrders = [];
 
   while (true) {
     const r = await client.get("/orders", {
@@ -122,15 +122,17 @@ async function fetchAllocatedOrdersFromCardTrader() {
     const batch = Array.isArray(r.data) ? r.data : [];
     if (!batch.length) break;
 
-    // Only keep allocated orders
-    const filtered = batch.filter((o) => o.state === "allocated");
-    allocatedOrders.push(...filtered);
+    // Treat PAID / SENT as "allocated"/safe to deduct
+    const filtered = batch.filter(
+      (o) => o.state === "paid" || o.state === "sent"
+    );
+    eligibleOrders.push(...filtered);
 
     if (batch.length < limit) break;
     page++;
   }
 
-  return allocatedOrders;
+  return eligibleOrders;
 }
 
 function extractLineData(line) {

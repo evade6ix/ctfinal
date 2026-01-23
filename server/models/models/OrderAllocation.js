@@ -1,4 +1,3 @@
-// server/models/OrderAllocation.js
 import mongoose from "mongoose";
 
 const pickedLocationSchema = new mongoose.Schema(

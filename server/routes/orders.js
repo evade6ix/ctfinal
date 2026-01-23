@@ -147,68 +147,70 @@ function extractLineData(line) {
   return { cardTraderId, quantity };
 }
 
-// =======================================================
 // POST /api/orders/sync
-//  - Decrements bins ONCE per order line (idempotent)
-// =======================================================
+// For each paid/sent order: if not allocated yet, trigger allocation by calling /api/order-articles/:id once.
 router.post("/sync", async (req, res) => {
   try {
-    const orders = await fetchAllocatedOrdersFromCardTrader();
-    let updatedLines = 0;
+    const client = ct();
 
-    for (const order of orders) {
-      const orderId = String(order.id);
-      const lines = order.lines || order.items || [];
+    let page = 1;
+    const limit = 50;
+    const allOrders = [];
 
-      for (const line of lines) {
-        const { cardTraderId, quantity } = extractLineData(line);
-        if (!cardTraderId || !quantity) continue;
+    while (true) {
+      const r = await client.get("/orders", {
+        params: { order_as: "seller", sort: "date.desc", page, limit },
+      });
 
-        const lineKey = `${orderId}:${cardTraderId}`;
+      const batch = Array.isArray(r.data) ? r.data : [];
+      if (!batch.length) break;
 
-        // 1️⃣ Skip if already processed
-        const already = await OrderAllocation.findOne({ lineKey });
-        if (already) continue;
+      allOrders.push(...batch);
+      if (batch.length < limit) break;
+      page++;
+    }
 
-        // 2️⃣ Find matching inventory item
-        const item = await InventoryItem.findOne({ cardTraderId });
-        if (!item) {
-          // Still store the allocation so we don't retry forever
-          await OrderAllocation.create({ orderId, lineKey });
-          continue;
-        }
+    // CardTrader Zero: once you see it, treat as ready
+    const eligible = allOrders.filter(
+      (o) => o.state === "paid" || o.state === "sent"
+    );
 
-        if (!item.locations || item.locations.length === 0) {
-          await OrderAllocation.create({ orderId, lineKey });
-          continue;
-        }
+    let triggered = 0;
+    let skippedAlreadyAllocated = 0;
 
-        // 3️⃣ Decrement bins
-        let remaining = quantity;
+    for (const o of eligible) {
+      const orderIdStr = String(o.id);
 
-        for (const loc of item.locations) {
-          if (remaining <= 0) break;
-          const take = Math.min(loc.quantity, remaining);
-          loc.quantity -= take;
-          remaining -= take;
-        }
-
-        await item.save();
-
-        // 4️⃣ Mark processed so we never subtract twice
-        await OrderAllocation.create({ orderId, lineKey });
-
-        updatedLines++;
+      // If we've already allocated ANY line for this order, skip triggering again.
+      // (Your order-articles route is also safe if called again, but this reduces work.)
+      const hasAnyAlloc = await OrderAllocation.exists({ orderId: orderIdStr });
+      if (hasAnyAlloc) {
+        skippedAlreadyAllocated++;
+        continue;
       }
+
+      // 🔥 Trigger the same logic your UI triggers.
+      // This will deduct bins + write OrderAllocation docs.
+      const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}`;
+      const resp = await fetch(url);
+
+      if (!resp.ok) {
+        const raw = await resp.text().catch(() => "");
+        console.error("❌ Failed to allocate order via order-articles", o.id, resp.status, raw);
+        continue;
+      }
+
+      triggered++;
     }
 
     res.json({
       ok: true,
-      updatedLines,
-      message: `Applied ${updatedLines} order lines`,
+      eligibleOrders: eligible.length,
+      triggered,
+      skippedAlreadyAllocated,
     });
   } catch (err) {
-    console.error("❌ Order sync failed:", err?.response?.data || err);
+    console.error("❌ /api/orders/sync failed:", err?.response?.data || err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });

@@ -37,14 +37,16 @@ app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
 
 // ===================================================================
-// AUTO-SYNC CARDTRADER ORDERS EVERY 5 MINUTES
+// AUTO-ALLOCATE / DEDUCT BINS FROM NEW ORDERS (CardTrader Zero)
+// Calls POST /api/orders/sync which triggers the same allocation logic
+// your UI uses (order-articles), but automatically.
 // ===================================================================
 
 async function triggerSyncOrders() {
   try {
-    console.log("🔁 [CT] Running /api/ct/sync-orders ...");
+    console.log("🔁 [ORDERS] Running POST /api/orders/sync ...");
 
-    const res = await fetch(`http://localhost:${PORT}/api/ct/sync-orders`, {
+    const res = await fetch(`http://localhost:${PORT}/api/orders/sync`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -52,27 +54,23 @@ async function triggerSyncOrders() {
     const raw = await res.text();
     let data = null;
 
-    // Try parsing JSON if it's JSON
     try {
       data = JSON.parse(raw);
     } catch {
-      // ignore — plain text response
+      // not JSON, ignore
     }
 
     if (!res.ok) {
-      console.error("❌ [CT] sync-orders failed", {
+      console.error("❌ [ORDERS] sync failed", {
         status: res.status,
         raw,
       });
       return;
     }
 
-    console.log("✅ [CT] sync-orders complete", {
-      fetchedOrders: data?.fetchedOrders,
-      appliedLines: data?.appliedLines,
-    });
+    console.log("✅ [ORDERS] sync complete", data || raw);
   } catch (err) {
-    console.error("❌ [CT] sync-orders error:", err?.message || err);
+    console.error("❌ [ORDERS] sync error:", err?.message || err);
   }
 }
 
@@ -93,12 +91,12 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
 
-      // 1️⃣ Run once immediately on startup
+      // Run once on startup
       triggerSyncOrders();
 
-      // 2️⃣ Then every 5 minutes
-      const FIVE_MINUTES = 5 * 60 * 1000;
-      setInterval(triggerSyncOrders, FIVE_MINUTES);
+      // Near real-time polling (safe due to OrderAllocation idempotency)
+      const ONE_MINUTE = 60 * 1000;
+      setInterval(triggerSyncOrders, ONE_MINUTE);
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);

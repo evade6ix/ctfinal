@@ -138,26 +138,31 @@ router.get("/:id", async (req, res) => {
           }
         }
 
-        // Format binLocations for the frontend (use bin name/label instead of raw _id)
-        const binLocations = (pickedLocations || []).map((loc) => {
+                const binLocations = (pickedLocations || []).map((loc) => {
           const bin = loc.bin;
           let binLabel = "?";
 
-          if (bin && typeof bin === "object") {
-            binLabel =
-              bin.label ||
-              bin.name ||
-              (bin._id ? String(bin._id) : "?");
-          } else if (bin) {
-            binLabel = String(bin);
+          if (bin) {
+            if (typeof bin === "object") {
+              // Could be a populated Bin doc OR a raw ObjectId
+              const anyBin = bin;
+              binLabel =
+                anyBin.label ||
+                anyBin.name ||
+                (anyBin._id ? String(anyBin._id) : bin.toString());
+            } else {
+              // string / number
+              binLabel = String(bin);
+            }
           }
 
           return {
             bin: binLabel,
-            row: loc.row,
-            quantity: loc.quantity,
+            row: loc.row ?? null,
+            quantity: loc.quantity ?? null,
           };
         });
+
 
         const image_url = await getScryfallImage(it.name);
 

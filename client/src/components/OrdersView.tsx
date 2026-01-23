@@ -12,6 +12,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+import { IconArrowsDownUp } from "@tabler/icons-react";
 
 type Buyer = {
   username?: string;
@@ -38,7 +39,6 @@ type OrderSummary = {
   allocated?: boolean; // 🔹 new flag from backend
 };
 
-
 type OrderItem = {
   id?: number;
   cardTraderId?: number;
@@ -58,6 +58,11 @@ export function OrdersView() {
   const [itemsByOrder, setItemsByOrder] = useState<
     Record<string | number, OrderItem[]>
   >({});
+
+  // 🔹 new state for sync button
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const fetchOrders = async () => {
     try {
@@ -131,6 +136,38 @@ export function OrdersView() {
     return "-";
   };
 
+  // 🔹 sync allocated orders -> hits POST /api/orders/sync
+  const handleSyncOrders = async () => {
+    try {
+      setSyncing(true);
+      setSyncMessage(null);
+      setSyncError(null);
+
+      const res = await fetch("/api/orders/sync", {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to sync orders");
+      }
+
+      const data = await res.json();
+      setSyncMessage(
+        data.message ??
+          `Sync complete. Updated ${data.updatedLines ?? 0} order lines.`
+      );
+
+      // Optional: refetch orders so allocated flags / totals refresh
+      fetchOrders();
+    } catch (err: any) {
+      console.error("Sync failed:", err);
+      setSyncError(err.message || "Failed to sync orders");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <Stack gap="md">
       <Group justify="space-between">
@@ -141,14 +178,38 @@ export function OrdersView() {
           </Text>
         </div>
 
-        <Button onClick={fetchOrders} loading={loading} variant="light">
-          Refresh
-        </Button>
+        <Group gap="xs">
+          <Button onClick={fetchOrders} loading={loading} variant="light">
+            Refresh
+          </Button>
+
+          <Button
+            leftSection={<IconArrowsDownUp size={16} />}
+            onClick={handleSyncOrders}
+            loading={syncing}
+            variant="filled"
+            color="yellow"
+          >
+            Sync allocated orders
+          </Button>
+        </Group>
       </Group>
 
       {error && (
         <Paper p="sm" withBorder>
           <Text c="red">{error}</Text>
+        </Paper>
+      )}
+
+      {syncMessage && (
+        <Paper p="sm" withBorder>
+          <Text c="teal">{syncMessage}</Text>
+        </Paper>
+      )}
+
+      {syncError && (
+        <Paper p="sm" withBorder>
+          <Text c="red">{syncError}</Text>
         </Paper>
       )}
 
@@ -185,20 +246,19 @@ export function OrdersView() {
                     style={{ cursor: "pointer" }}
                   >
                     <Table.Td>
-  <Group gap={6}>
-    <Text fw={500}>{o.code}</Text>
+                      <Group gap={6}>
+                        <Text fw={500}>{o.code}</Text>
 
-    {o.allocated && (
-      <Badge size="xs" color="yellow" variant="filled">
-        Allocated
-      </Badge>
-    )}
-  </Group>
-  <Text size="xs" c="dimmed">
-    as {o.orderAs}
-  </Text>
-</Table.Td>
-
+                        {o.allocated && (
+                          <Badge size="xs" color="yellow" variant="filled">
+                            Allocated
+                          </Badge>
+                        )}
+                      </Group>
+                      <Text size="xs" c="dimmed">
+                        as {o.orderAs}
+                      </Text>
+                    </Table.Td>
 
                     <Table.Td>
                       <Badge
@@ -309,9 +369,8 @@ export function OrdersView() {
                                       <Group gap={6} mt={6}>
                                         {(it.binLocations || []).map((b, i) => (
                                           <Badge key={i} color="yellow">
-                                            {b.bin ?? "?"} / Row{" "}
-                                            {b.row ?? "?"} (x
-                                            {b.quantity ?? "?"})
+                                            {b.bin ?? "?"} / Row {b.row ?? "?"}{" "}
+                                            (x{b.quantity ?? "?"})
                                           </Badge>
                                         ))}
                                       </Group>

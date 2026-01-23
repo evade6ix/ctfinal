@@ -1,101 +1,117 @@
-// server/routes/orders.js
-import express from "express";
-import { ct } from "../ctClient.js";
-import { OrderAllocation } from "../models/OrderAllocation.js";
+// =======================================================
+// POST /api/orders/sync
+// - Fetch allocated orders from CardTrader
+// - For each line: decrement bins ONCE ONLY
+// =======================================================
 
+import { InventoryItem } from "../models/InventoryItem.js";
 
-const router = express.Router();
+// Helper to fetch allocated orders from CardTrader
+async function fetchAllocatedOrdersFromCardTrader() {
+  const client = ct();
 
-// simple in-memory cache to avoid spamming CT
-let cachedOrders = null;
-let cachedTime = 0;
-const CACHE_TTL = 60 * 1000; // 1 minute
+  let page = 1;
+  const limit = 50;
+  const allocatedOrders = [];
 
-router.get("/", async (req, res) => {
-  try {
-    const now = Date.now();
-    if (cachedOrders && now - cachedTime < CACHE_TTL) {
-      return res.json(cachedOrders);
-    }
-
-    const client = ct();
-    let page = 1;
-    const limit = 50;
-    const allOrders = [];
-
-    while (true) {
-      const r = await client.get("/orders", {
-        params: {
-          order_as: "seller",
-          sort: "date.desc",
-          page,
-          limit,
-        },
-      });
-
-      const batch = Array.isArray(r.data) ? r.data : [];
-      if (!batch.length) break;
-
-      allOrders.push(...batch);
-      if (batch.length < limit) break;
-
-      page++;
-    }
-
-    console.log("Fetched", allOrders.length, "orders");
-
-
-    const mapped = allOrders.map((o) => {
-      // Extract date from code (YYYYMMDDxxxx)
-      let extractedDate = null;
-      if (o.code && o.code.length >= 8) {
-        const d = o.code.substring(0, 8);
-        extractedDate = `${d.substring(0, 4)}-${d.substring(
-          4,
-          6
-        )}-${d.substring(6, 8)}`;
-      }
-
-      return {
-        id: o.id, // numeric id used everywhere
-        code: o.code,
-        state: o.state,
-        orderAs: o.order_as,
-        buyer: o.buyer || null,
-        size: o.size,
-        date: extractedDate,
-        sellerTotalCents: o.seller_total?.cents ?? null,
-        sellerTotalCurrency: o.seller_total?.currency ?? null,
-        formattedTotal: o.formatted_total ?? null,
-        // we'll fill allocated: boolean below
-      };
+  while (true) {
+    const r = await client.get("/orders", {
+      params: {
+        order_as: "seller",
+        sort: "date.desc",
+        page,
+        limit,
+      },
     });
 
-    // 🔹 Figure out which orders already have allocations
-    const orderIdStrings = mapped.map((o) => String(o.id));
-    const allocations = await OrderAllocation.find(
-      { orderId: { $in: orderIdStrings } },
-      "orderId"
-    ).lean();
+    const batch = Array.isArray(r.data) ? r.data : [];
+    if (!batch.length) break;
 
-    const allocatedSet = new Set(allocations.map((a) => a.orderId));
+    // We only care about allocated orders here
+    const filtered = batch.filter((o) => o.state === "allocated");
+    allocatedOrders.push(...filtered);
 
-    const mappedWithFlag = mapped.map((o) => ({
-      ...o,
-      allocated: allocatedSet.has(String(o.id)),
-    }));
+    if (batch.length < limit) break;
+    page++;
+  }
 
-    cachedOrders = mappedWithFlag;
-    cachedTime = Date.now();
+  return allocatedOrders;
+}
 
-    res.json(mappedWithFlag);
+// Helper to extract needed data from order lines
+function extractLineData(line) {
+  const cardTraderId =
+    line.card_trader_id ||
+    line.product_id ||
+    line.blueprint_id ||
+    line.cardTraderId;
 
+  const quantity = line.quantity || line.qty || 0;
 
+  return { cardTraderId, quantity };
+}
 
+// MAIN SYNC ROUTE
+router.post("/sync", async (req, res) => {
+  try {
+    const orders = await fetchAllocatedOrdersFromCardTrader();
+    let updatedLines = 0;
+
+    for (const order of orders) {
+      const orderId = String(order.id);
+      const lines = order.lines || order.items || [];
+
+      for (const line of lines) {
+        const { cardTraderId, quantity } = extractLineData(line);
+        if (!cardTraderId || !quantity) continue;
+
+        // Unique key (orderId + cardTraderId)
+        const lineKey = `${orderId}:${cardTraderId}`;
+
+        // 1️⃣ Check if this line was already processed
+        const already = await OrderAllocation.findOne({ lineKey });
+        if (already) continue;
+
+        // 2️⃣ Find matching Mongo inventory item
+        const item = await InventoryItem.findOne({ cardTraderId });
+        if (!item) {
+          // Still record so we never retry this same missing item
+          await OrderAllocation.create({ orderId, lineKey });
+          continue;
+        }
+
+        if (!item.locations || item.locations.length === 0) {
+          // Item exists but has no bins → still record it to avoid loops
+          await OrderAllocation.create({ orderId, lineKey });
+          continue;
+        }
+
+        // 3️⃣ Decrement bins (first → next → next…)
+        let remaining = quantity;
+
+        for (const loc of item.locations) {
+          if (remaining <= 0) break;
+          const take = Math.min(loc.quantity, remaining);
+          loc.quantity -= take;
+          remaining -= take;
+        }
+
+        await item.save();
+
+        // 4️⃣ Mark this line as processed so it never happens twice
+        await OrderAllocation.create({ orderId, lineKey });
+
+        updatedLines++;
+      }
+    }
+
+    res.json({
+      ok: true,
+      updatedLines,
+      message: `Applied ${updatedLines} order lines`,
+    });
   } catch (err) {
-    console.error("❌ Error fetching orders:", err?.response?.data || err);
-    res.status(500).json({ error: "Failed to fetch orders" });
+    console.error("❌ Order sync failed:", err?.response?.data || err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
-
-export default router;

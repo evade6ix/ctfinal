@@ -1,8 +1,9 @@
-// server/routes/orderArticles.js
 import express from "express";
 import { ct } from "../ctClient.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 import axios from "axios";
+import { allocateFromBins } from "../utils/allocateFromBins.js";
+
 
 const router = express.Router();
 
@@ -46,17 +47,19 @@ router.get("/:id", async (req, res) => {
     const ctIds = baseItems.map((i) => i.cardTraderId).filter(Boolean);
     console.log("🔗 product_ids for Mongo lookup:", ctIds);
 
-    let dbItems = [];
+        let dbItems = [];
     if (ctIds.length) {
       dbItems = await InventoryItem.find({
         cardTraderId: { $in: ctIds },
-      });
+      }).populate("locations.bin", "name label rows description");
     }
 
-    const locationMap = {};
+    // Map: cardTraderId -> inventory doc
+    const invMap = new Map();
     for (const item of dbItems) {
-      locationMap[item.cardTraderId] = item.locations || [];
+      invMap.set(item.cardTraderId, item);
     }
+
 
     // helper: Scryfall lookup by exact card name
     const getScryfallImage = async (cardName) => {
@@ -104,10 +107,58 @@ router.get("/:id", async (req, res) => {
       }
     };
 
-    // 4️⃣ Attach bin locations + image_url
+       // 4️⃣ Allocate from bins + attach image_url
     const final = await Promise.all(
       baseItems.map(async (it) => {
-        const binLocations = locationMap[it.cardTraderId] || [];
+        const inv = it.cardTraderId
+          ? invMap.get(it.cardTraderId)
+          : null;
+
+        let pickedLocations = [];
+
+        if (inv && it.quantity && it.quantity > 0) {
+          const { pickedLocations: chosen, remainingLocations } =
+            allocateFromBins(inv.locations || [], it.quantity);
+
+          if (chosen.length > 0) {
+            // Update inventory: subtract what we picked
+            const totalPicked = chosen.reduce(
+              (sum, loc) => sum + (loc.quantity || 0),
+              0
+            );
+
+            inv.locations = remainingLocations;
+            inv.totalQuantity = Math.max(
+              0,
+              (inv.totalQuantity || 0) - totalPicked
+            );
+
+            await inv.save();
+            pickedLocations = chosen;
+          }
+        }
+
+        // Format binLocations for the frontend (use bin name/label instead of raw _id)
+        const binLocations = (pickedLocations || []).map((loc) => {
+          const bin = loc.bin;
+          let binLabel = "?";
+
+          if (bin && typeof bin === "object") {
+            binLabel =
+              bin.label ||
+              bin.name ||
+              (bin._id ? String(bin._id) : "?");
+          } else if (bin) {
+            binLabel = String(bin);
+          }
+
+          return {
+            bin: binLabel,
+            row: loc.row,
+            quantity: loc.quantity,
+          };
+        });
+
         const image_url = await getScryfallImage(it.name);
 
         return {
@@ -117,6 +168,7 @@ router.get("/:id", async (req, res) => {
         };
       })
     );
+
 
     return res.json(final);
   } catch (err) {

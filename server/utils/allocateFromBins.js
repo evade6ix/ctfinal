@@ -1,46 +1,61 @@
 // server/utils/allocateFromBins.js
 
 /**
- * locations: [{ bin: ObjectId or populated object, row: number, quantity: number }]
- * requestedQty: number (how many the order needs)
+ * locations: [{ bin: ObjectId | BinDoc, row: number, quantity: number }]
+ * requestedQty: how many the order needs
+ *
+ * Returns:
+ * {
+ *   pickedLocations: [same shape as locations but with adjusted quantity],
+ *   remainingLocations: [same shape as locations],
+ *   unfilled: number
+ * }
  */
 export function allocateFromBins(locations, requestedQty) {
-  let remainingToFill = requestedQty;
+  // Normalize to plain JS objects so we don't lose fields when spreading
+  const locs = Array.isArray(locations)
+    ? locations.map((loc) =>
+        loc && typeof loc.toObject === "function" ? loc.toObject() : loc
+      )
+    : [];
 
-  // Clone so we don't mutate the original directly
-  const sorted = [...locations].sort((a, b) => {
-    // strategy: prefer higher quantity first
-    return (b.quantity || 0) - (a.quantity || 0);
+  let remainingToFill = Number(requestedQty) || 0;
+
+  // Sort so we prefer bins with higher quantity first
+  const sorted = [...locs].sort((a, b) => {
+    const qa = Number(a.quantity) || 0;
+    const qb = Number(b.quantity) || 0;
+    return qb - qa;
   });
 
   const pickedLocations = [];
   const remainingLocations = [];
 
   for (const loc of sorted) {
+    const available = Number(loc.quantity) || 0;
+
     if (remainingToFill <= 0) {
-      // we've already filled everything; keep the rest as-is
+      // We've filled everything; keep the rest unchanged
       remainingLocations.push({ ...loc });
       continue;
     }
 
-    const available = loc.quantity || 0;
-
     if (available <= 0) {
-      // nothing useful here
+      // Nothing usable here
       remainingLocations.push({ ...loc });
       continue;
     }
 
     if (available <= remainingToFill) {
-      // use entire location
+      // Use entire location
       pickedLocations.push({
         ...loc,
         quantity: available,
       });
       remainingToFill -= available;
-      // nothing left from this location, so we don't push it to remainingLocations
+      // nothing left from this location
     } else {
-      // we only need part of this location
+      // Use part of this location
       pickedLocations.push({
         ...loc,
         quantity: remainingToFill,
@@ -58,6 +73,6 @@ export function allocateFromBins(locations, requestedQty) {
   return {
     pickedLocations,
     remainingLocations,
-    unfilled: remainingToFill, // >0 if you didn't have enough stock
+    unfilled: remainingToFill,
   };
 }

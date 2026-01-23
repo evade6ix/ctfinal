@@ -58,6 +58,8 @@ export function InventoryBinAssignmentView() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [loadingBins, setLoadingBins] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [assigningUnassigned, setAssigningUnassigned] = useState(false);
+
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -326,6 +328,61 @@ export function InventoryBinAssignmentView() {
       setAssigning(false);
     }
   }
+async function handleAssignUnassignedToBin() {
+  if (!selectedSet) {
+    setError("Select a set first.");
+    return;
+  }
+  if (!selectedBinId) {
+    setError("Select a bin.");
+    return;
+  }
+  if (typeof row !== "number" || row < 1 || row > 5) {
+    setError("Row must be 1–5.");
+    return;
+  }
+
+  setError(null);
+  setSuccessMessage(null);
+  setAssigningUnassigned(true);
+
+  try {
+    const res = await fetch("/api/inventory/assign-unassigned-set-to-bin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        setCode: selectedSet,
+        binId: selectedBinId,
+        row,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data.error || data.ok === false) {
+      throw new Error(data.error || "Assignment failed");
+    }
+
+    setSuccessMessage(
+      `Assigned ${data.totalMoved} unassigned cards from ${selectedSet} to bin.`
+    );
+
+    // Refresh inventory list
+    const refresh = await fetch("/api/inventory");
+    if (refresh.ok) {
+      const json = await refresh.json();
+      const arr: InventoryItem[] = Array.isArray(json)
+        ? json
+        : json.items || [];
+      setItems(arr);
+    }
+  } catch (err: any) {
+    console.error(err);
+    setError(err.message || "Failed to assign unassigned items.");
+  } finally {
+    setAssigningUnassigned(false);
+  }
+}
 
 
   // ---------- Render ----------
@@ -434,6 +491,20 @@ export function InventoryBinAssignmentView() {
           >
             Assign entire set to bin
           </Button>
+          <Button
+  variant="outline"
+  radius="xl"
+  size="md"
+  leftSection={<IconBox size={18} />}
+  disabled={
+    !selectedSet || !selectedBinId || anyLoading || assigningUnassigned
+  }
+  loading={assigningUnassigned}
+  onClick={handleAssignUnassignedToBin}
+>
+  Push unassigned to bin
+</Button>
+
         </Group>
       </Paper>
 

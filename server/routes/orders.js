@@ -179,10 +179,14 @@ router.post("/sync", async (req, res) => {
     console.log("DEBUG /api/orders/sync states:", states);
     console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
 
-    // CardTrader Zero: once you see it, treat as ready
-    const eligible = allOrders.filter(
-      (o) => o.state === "paid" || o.state === "sent"
-    );
+    const eligible = allOrders.filter((o) => {
+  const s = String(o.state || "").toLowerCase();
+  const isZero = !!o.via_cardtrader_zero;
+  if (!isZero) return false;
+
+  // CardTrader Zero "real order" states (yours is hub_pending)
+  return s === "hub_pending" || s === "sent" || s === "paid";
+});
 
 
     let triggered = 0;

@@ -34,7 +34,7 @@ type Order = {
   lines?: OrderLine[];
 };
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 
 export function OrdersDbView() {
   const [orders, setOrders] = useState<Order[]>([]);

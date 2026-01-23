@@ -21,7 +21,7 @@ type Bin = {
   description?: string;
 };
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 
 export function InventoryBinsView() {
   const [bins, setBins] = useState<Bin[]>([]);

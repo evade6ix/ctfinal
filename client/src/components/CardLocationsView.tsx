@@ -15,7 +15,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 
 type BinInfo =
   | string

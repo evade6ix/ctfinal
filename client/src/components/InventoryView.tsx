@@ -42,7 +42,7 @@ type InventoryItem = {
   locations: Location[];
 };
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 
 export function InventoryView() {
   const [allItems, setAllItems] = useState<InventoryItem[]>([]);

@@ -21,7 +21,7 @@ type ChangeLogEntry = {
   createdAt: string;
 };
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = "/api";
 
 export function ChangeLogsView() {
   const [logs, setLogs] = useState<ChangeLogEntry[]>([]);

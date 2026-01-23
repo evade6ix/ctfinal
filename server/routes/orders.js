@@ -5,22 +5,12 @@ import { OrderAllocation } from "../models/OrderAllocation.js";
 
 const router = express.Router();
 
-// simple in-memory cache to avoid spamming CT
-let cachedOrders = null;
-let cachedTime = 0;
-const CACHE_TTL = 60 * 1000; // 1 minute
-
 // =======================================================
 // GET /api/orders
-//  - Lists orders with allocated flag
+//  - Lists orders with allocated flag (no in-memory cache)
 // =======================================================
 router.get("/", async (req, res) => {
   try {
-    const now = Date.now();
-    if (cachedOrders && now - cachedTime < CACHE_TTL) {
-      return res.json(cachedOrders);
-    }
-
     const client = ct();
     let page = 1;
     const limit = 50;
@@ -41,19 +31,25 @@ router.get("/", async (req, res) => {
 
       allOrders.push(...batch);
       if (batch.length < limit) break;
+
       page++;
     }
+
+    console.log("Fetched", allOrders.length, "orders");
 
     const mapped = allOrders.map((o) => {
       // Extract date from code (YYYYMMDDxxxx)
       let extractedDate = null;
       if (o.code && o.code.length >= 8) {
         const d = o.code.substring(0, 8);
-        extractedDate = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`;
+        extractedDate = `${d.substring(0, 4)}-${d.substring(
+          4,
+          6
+        )}-${d.substring(6, 8)}`;
       }
 
       return {
-        id: o.id,
+        id: o.id, // numeric id used everywhere
         code: o.code,
         state: o.state,
         orderAs: o.order_as,
@@ -63,6 +59,7 @@ router.get("/", async (req, res) => {
         sellerTotalCents: o.seller_total?.cents ?? null,
         sellerTotalCurrency: o.seller_total?.currency ?? null,
         formattedTotal: o.formatted_total ?? null,
+        // allocated filled below
       };
     });
 
@@ -80,9 +77,6 @@ router.get("/", async (req, res) => {
       allocated: allocatedSet.has(String(o.id)),
     }));
 
-    cachedOrders = mappedWithFlag;
-    cachedTime = Date.now();
-
     res.json(mappedWithFlag);
   } catch (err) {
     console.error("❌ Error fetching orders:", err?.response?.data || err);
@@ -92,11 +86,9 @@ router.get("/", async (req, res) => {
 
 // =======================================================
 // POST /api/orders/sync
-//  - Poll CardTrader orders
-//  - For CardTrader Zero (via_cardtrader_zero), treat hub_pending as "real"
-//  - For each eligible order that has no allocations yet:
-//      trigger allocation by calling /api/order-articles/:id once
-//  - Safe to run repeatedly due to OrderAllocation idempotency
+//  - For each Zero order in hub_pending/paid/sent that
+//    has no allocations yet, call /api/order-articles/:id
+//    so bins are deducted & OrderAllocation rows are written.
 // =======================================================
 router.post("/sync", async (req, res) => {
   try {
@@ -119,71 +111,78 @@ router.post("/sync", async (req, res) => {
       page++;
     }
 
-    // CardTrader Zero: once you see it, treat as ready.
+    // Debug: state counts
+    const stateCounts = {};
+    for (const o of allOrders) {
+      const s = o.state ?? o.status ?? "UNKNOWN";
+      stateCounts[s] = (stateCounts[s] || 0) + 1;
+    }
+    console.log("DEBUG /api/orders/sync states:", stateCounts);
+    console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
+
+    // Only CardTrader Zero orders that are real (hub_pending/paid/sent)
     const eligible = allOrders.filter((o) => {
       const s = String(o.state || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
       if (!isZero) return false;
-
-      // Zero "real" states we can allocate/deduct on
       return s === "hub_pending" || s === "sent" || s === "paid";
     });
-
-    // ✅ Safety cap so we don't slam CT (and your own server) every minute
-    const MAX_PER_RUN = Number(process.env.ORDERS_SYNC_MAX || 10);
-    const toProcess = eligible.slice(0, MAX_PER_RUN);
 
     let triggered = 0;
     let skippedAlreadyAllocated = 0;
     let failed = 0;
 
-    for (const o of toProcess) {
+    for (const o of eligible) {
       const orderIdStr = String(o.id);
 
-      // If we've already allocated ANY line for this order, skip triggering again.
+      // Skip if *any* allocation exists for this order
       const hasAnyAlloc = await OrderAllocation.exists({ orderId: orderIdStr });
       if (hasAnyAlloc) {
         skippedAlreadyAllocated++;
         continue;
       }
 
-      // Trigger the same logic your UI triggers (allocates + deducts + writes OrderAllocation)
-      // Note: orderArticles.js needs to support skipImages=1 (we do that next step)
-      const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}?skipImages=1`;
+      const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}`;
+      console.log(`🔁 [ORDERS] Allocating order ${orderIdStr} via ${url}`);
 
-      const resp = await fetch(url);
-      if (!resp.ok) {
+      try {
+        const resp = await fetch(url);
         const raw = await resp.text().catch(() => "");
+
+        if (!resp.ok) {
+          console.error(
+            "❌ Failed to allocate order via order-articles",
+            o.id,
+            resp.status,
+            raw.slice(0, 300)
+          );
+          failed++;
+          continue;
+        }
+
+        triggered++;
+      } catch (err) {
         console.error(
-          "❌ Failed to allocate order via order-articles",
-          { id: o.id, status: resp.status, raw: raw?.slice(0, 500) }
+          "❌ Error allocating order via order-articles",
+          o.id,
+          err?.message || err
         );
         failed++;
-        continue;
       }
-
-      triggered++;
     }
 
-    // Short, safe summary log (no personal data)
-    console.log("✅ [ORDERS] sync summary", {
-      fetchedOrders: allOrders.length,
-      eligibleOrders: eligible.length,
-      processedThisRun: toProcess.length,
-      triggered,
-      skippedAlreadyAllocated,
-      failed,
-    });
-
-    res.json({
+    const summary = {
       ok: true,
       fetchedOrders: allOrders.length,
       eligibleOrders: eligible.length,
-      processedThisRun: toProcess.length,
+      processedThisRun: triggered + skippedAlreadyAllocated + failed,
       triggered,
       skippedAlreadyAllocated,
       failed,
-    });
+    };
+
+    console.log("✅ [ORDERS] sync summary", summary);
+    res.json(summary);
   } catch (err) {
     console.error("❌ /api/orders/sync failed:", err?.response?.data || err);
     res.status(500).json({ ok: false, error: err.message });

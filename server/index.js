@@ -13,7 +13,6 @@ import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
-import ordersRouter from "./routes/orders.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,7 +35,6 @@ app.use("/api/order-articles", orderArticlesRouter);
 app.use("/api/changelog", changelogRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
-app.use("/api/orders", ordersRouter);
 
 // ===================================================================
 // AUTO-SYNC CARDTRADER ORDERS EVERY 5 MINUTES

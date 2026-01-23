@@ -157,7 +157,7 @@ router.post("/sync", async (req, res) => {
     const limit = 50;
     const allOrders = [];
 
-    while (true) {
+        while (true) {
       const r = await client.get("/orders", {
         params: { order_as: "seller", sort: "date.desc", page, limit },
       });
@@ -170,10 +170,20 @@ router.post("/sync", async (req, res) => {
       page++;
     }
 
+    // ✅ DEBUG BLOCK (PUT IT HERE)
+    const states = {};
+    for (const o of allOrders) {
+      const s = o.state ?? o.status ?? "UNKNOWN";
+      states[s] = (states[s] || 0) + 1;
+    }
+    console.log("DEBUG /api/orders/sync states:", states);
+    console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
+
     // CardTrader Zero: once you see it, treat as ready
     const eligible = allOrders.filter(
       (o) => o.state === "paid" || o.state === "sent"
     );
+
 
     let triggered = 0;
     let skippedAlreadyAllocated = 0;

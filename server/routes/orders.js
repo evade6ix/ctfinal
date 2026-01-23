@@ -1,12 +1,107 @@
-// =======================================================
-// POST /api/orders/sync
-// - Fetch allocated orders from CardTrader
-// - For each line: decrement bins ONCE ONLY
-// =======================================================
-
+// server/routes/orders.js
+import express from "express";
+import { ct } from "../ctClient.js";
+import { OrderAllocation } from "../models/OrderAllocation.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 
-// Helper to fetch allocated orders from CardTrader
+const router = express.Router();
+
+// simple in-memory cache to avoid spamming CT
+let cachedOrders = null;
+let cachedTime = 0;
+const CACHE_TTL = 60 * 1000; // 1 minute
+
+// =======================================================
+// GET /api/orders
+//  - Lists orders with allocated flag
+// =======================================================
+router.get("/", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (cachedOrders && now - cachedTime < CACHE_TTL) {
+      return res.json(cachedOrders);
+    }
+
+    const client = ct();
+    let page = 1;
+    const limit = 50;
+    const allOrders = [];
+
+    while (true) {
+      const r = await client.get("/orders", {
+        params: {
+          order_as: "seller",
+          sort: "date.desc",
+          page,
+          limit,
+        },
+      });
+
+      const batch = Array.isArray(r.data) ? r.data : [];
+      if (!batch.length) break;
+
+      allOrders.push(...batch);
+      if (batch.length < limit) break;
+
+      page++;
+    }
+
+    console.log("Fetched", allOrders.length, "orders");
+
+    const mapped = allOrders.map((o) => {
+      // Extract date from code (YYYYMMDDxxxx)
+      let extractedDate = null;
+      if (o.code && o.code.length >= 8) {
+        const d = o.code.substring(0, 8);
+        extractedDate = `${d.substring(0, 4)}-${d.substring(
+          4,
+          6
+        )}-${d.substring(6, 8)}`;
+      }
+
+      return {
+        id: o.id, // numeric id used everywhere
+        code: o.code,
+        state: o.state,
+        orderAs: o.order_as,
+        buyer: o.buyer || null,
+        size: o.size,
+        date: extractedDate,
+        sellerTotalCents: o.seller_total?.cents ?? null,
+        sellerTotalCurrency: o.seller_total?.currency ?? null,
+        formattedTotal: o.formatted_total ?? null,
+        // allocated flag filled below
+      };
+    });
+
+    // 🔹 Figure out which orders already have allocations
+    const orderIdStrings = mapped.map((o) => String(o.id));
+    const allocations = await OrderAllocation.find(
+      { orderId: { $in: orderIdStrings } },
+      "orderId"
+    ).lean();
+
+    const allocatedSet = new Set(allocations.map((a) => a.orderId));
+
+    const mappedWithFlag = mapped.map((o) => ({
+      ...o,
+      allocated: allocatedSet.has(String(o.id)),
+    }));
+
+    cachedOrders = mappedWithFlag;
+    cachedTime = Date.now();
+
+    res.json(mappedWithFlag);
+  } catch (err) {
+    console.error("❌ Error fetching orders:", err?.response?.data || err);
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// =======================================================
+// Helpers for sync
+// =======================================================
+
 async function fetchAllocatedOrdersFromCardTrader() {
   const client = ct();
 
@@ -27,7 +122,7 @@ async function fetchAllocatedOrdersFromCardTrader() {
     const batch = Array.isArray(r.data) ? r.data : [];
     if (!batch.length) break;
 
-    // We only care about allocated orders here
+    // Only keep allocated orders
     const filtered = batch.filter((o) => o.state === "allocated");
     allocatedOrders.push(...filtered);
 
@@ -38,7 +133,6 @@ async function fetchAllocatedOrdersFromCardTrader() {
   return allocatedOrders;
 }
 
-// Helper to extract needed data from order lines
 function extractLineData(line) {
   const cardTraderId =
     line.card_trader_id ||
@@ -51,7 +145,10 @@ function extractLineData(line) {
   return { cardTraderId, quantity };
 }
 
-// MAIN SYNC ROUTE
+// =======================================================
+// POST /api/orders/sync
+//  - Decrements bins ONCE per order line (idempotent)
+// =======================================================
 router.post("/sync", async (req, res) => {
   try {
     const orders = await fetchAllocatedOrdersFromCardTrader();
@@ -65,28 +162,26 @@ router.post("/sync", async (req, res) => {
         const { cardTraderId, quantity } = extractLineData(line);
         if (!cardTraderId || !quantity) continue;
 
-        // Unique key (orderId + cardTraderId)
         const lineKey = `${orderId}:${cardTraderId}`;
 
-        // 1️⃣ Check if this line was already processed
+        // 1️⃣ Skip if already processed
         const already = await OrderAllocation.findOne({ lineKey });
         if (already) continue;
 
-        // 2️⃣ Find matching Mongo inventory item
+        // 2️⃣ Find matching inventory item
         const item = await InventoryItem.findOne({ cardTraderId });
         if (!item) {
-          // Still record so we never retry this same missing item
+          // Still store the allocation so we don't retry forever
           await OrderAllocation.create({ orderId, lineKey });
           continue;
         }
 
         if (!item.locations || item.locations.length === 0) {
-          // Item exists but has no bins → still record it to avoid loops
           await OrderAllocation.create({ orderId, lineKey });
           continue;
         }
 
-        // 3️⃣ Decrement bins (first → next → next…)
+        // 3️⃣ Decrement bins
         let remaining = quantity;
 
         for (const loc of item.locations) {
@@ -98,7 +193,7 @@ router.post("/sync", async (req, res) => {
 
         await item.save();
 
-        // 4️⃣ Mark this line as processed so it never happens twice
+        // 4️⃣ Mark processed so we never subtract twice
         await OrderAllocation.create({ orderId, lineKey });
 
         updatedLines++;
@@ -115,3 +210,5 @@ router.post("/sync", async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+export default router;

@@ -34,7 +34,10 @@ type OrderSummary = {
   formattedTotal?: string | null;
 
   date?: string; // extracted YYYY-MM-DD
+
+  allocated?: boolean; // 🔹 new flag from backend
 };
+
 
 type OrderItem = {
   id?: number;
@@ -182,11 +185,20 @@ export function OrdersView() {
                     style={{ cursor: "pointer" }}
                   >
                     <Table.Td>
-                      <Text fw={500}>{o.code}</Text>
-                      <Text size="xs" c="dimmed">
-                        as {o.orderAs}
-                      </Text>
-                    </Table.Td>
+  <Group gap={6}>
+    <Text fw={500}>{o.code}</Text>
+
+    {o.allocated && (
+      <Badge size="xs" color="yellow" variant="filled">
+        Allocated
+      </Badge>
+    )}
+  </Group>
+  <Text size="xs" c="dimmed">
+    as {o.orderAs}
+  </Text>
+</Table.Td>
+
 
                     <Table.Td>
                       <Badge

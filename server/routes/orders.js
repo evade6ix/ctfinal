@@ -1,6 +1,8 @@
 // server/routes/orders.js
 import express from "express";
 import { ct } from "../ctClient.js";
+import { OrderAllocation } from "../models/OrderAllocation.js";
+
 
 const router = express.Router();
 
@@ -42,6 +44,7 @@ router.get("/", async (req, res) => {
 
     console.log("Fetched", allOrders.length, "orders");
 
+
     const mapped = allOrders.map((o) => {
       // Extract date from code (YYYYMMDDxxxx)
       let extractedDate = null;
@@ -54,8 +57,8 @@ router.get("/", async (req, res) => {
       }
 
       return {
-        id: o.id,                 // 🔴 numeric id used everywhere
-        code: o.code,             // string shown in table
+        id: o.id, // numeric id used everywhere
+        code: o.code,
         state: o.state,
         orderAs: o.order_as,
         buyer: o.buyer || null,
@@ -64,13 +67,31 @@ router.get("/", async (req, res) => {
         sellerTotalCents: o.seller_total?.cents ?? null,
         sellerTotalCurrency: o.seller_total?.currency ?? null,
         formattedTotal: o.formatted_total ?? null,
+        // we'll fill allocated: boolean below
       };
     });
 
-    cachedOrders = mapped;
+    // 🔹 Figure out which orders already have allocations
+    const orderIdStrings = mapped.map((o) => String(o.id));
+    const allocations = await OrderAllocation.find(
+      { orderId: { $in: orderIdStrings } },
+      "orderId"
+    ).lean();
+
+    const allocatedSet = new Set(allocations.map((a) => a.orderId));
+
+    const mappedWithFlag = mapped.map((o) => ({
+      ...o,
+      allocated: allocatedSet.has(String(o.id)),
+    }));
+
+    cachedOrders = mappedWithFlag;
     cachedTime = Date.now();
 
-    res.json(mapped);
+    res.json(mappedWithFlag);
+
+
+
   } catch (err) {
     console.error("❌ Error fetching orders:", err?.response?.data || err);
     res.status(500).json({ error: "Failed to fetch orders" });

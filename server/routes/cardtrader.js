@@ -3,6 +3,7 @@ import axios from "axios";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { ChangeLog } from "../models/ChangeLog.js";
 import { applyStagedToInventory } from "../utils/applyStagedToInventory.js";
+import { SyncState } from "../models/SyncState.js";
 
 const router = express.Router();
 
@@ -456,109 +457,6 @@ router.get("/inventory", async (req, res) => {
     });
   }
 });
-
-// =======================
-// SYNC CARDTRADER ORDERS → MONGO INVENTORY
-// POST /api/ct/sync-orders
-// Uses /orders and skips orders already applied (via ChangeLog)
-// =======================
-router.post("/sync-orders", async (req, res) => {
-  try {
-    const api = ct();
-
-    const PER_PAGE = 50;
-    const MAX_PAGES = 5; // safety so we don't hammer the API
-    const allOrders = [];
-
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const { data } = await api.get("/orders", {
-        params: {
-          page,
-          per_page: PER_PAGE,
-          // You can add filters later if the API supports them, e.g.:
-          // role: "seller",
-          // state: "completed",
-        },
-      });
-
-      const arr = Array.isArray(data)
-        ? data
-        : Array.isArray(data.orders)
-        ? data.orders
-        : [];
-
-      if (!arr.length) break;
-
-      allOrders.push(...arr);
-
-      if (arr.length < PER_PAGE) break;
-    }
-
-    if (allOrders.length > 0) {
-      console.log(
-        "🔍 Sample CT order:",
-        JSON.stringify(allOrders[0], null, 2)
-      );
-    } else {
-      console.log("🔍 No CT orders returned from /orders");
-    }
-
-    let totalAppliedLines = 0;
-    const perOrder = [];
-
-    for (const order of allOrders) {
-      // Normalize orderId same way as in applyOrderToInventory
-      const orderIdRaw = order?.id ?? order?.order_id ?? order?.number;
-      const orderId = Number.isFinite(Number(orderIdRaw))
-        ? Number(orderIdRaw)
-        : null;
-
-      // 🔒 Skip orders we've already applied at least once
-      if (
-        orderId &&
-        (await ChangeLog.exists({
-          type: "order-applied",
-          orderId,
-        }))
-      ) {
-        perOrder.push({
-          orderId,
-          appliedLines: 0,
-          skipped: true,
-          reason: "already_applied",
-        });
-        continue;
-      }
-
-      // First time seeing this order → actually apply to inventory
-      const result = await applyOrderToInventory(order);
-      totalAppliedLines += result.appliedLines;
-      perOrder.push({
-        orderId: result.orderId,
-        appliedLines: result.appliedLines,
-        skipped: false,
-      });
-    }
-
-    return res.json({
-      ok: true,
-      fetchedOrders: allOrders.length,
-      appliedLines: totalAppliedLines,
-      perOrder,
-    });
-  } catch (e) {
-    console.error("Error in /api/ct/sync-orders:", e?.response?.data || e);
-    return res.status(e?.response?.status || 500).json({
-      ok: false,
-      error: e?.message || "Server error",
-      details: e?.response?.data || null,
-    });
-  }
-});
-
-
-
-
 
 
 

@@ -5,32 +5,32 @@
       "destination": "https://ctfinal-production.up.railway.app/api/:path*"
     },
     {
-      "source": "/bins/:path*",
-      "destination": "https://ctfinal-production.up.railway.app/bins/:path*"
-    },
-    {
       "source": "/bins",
       "destination": "https://ctfinal-production.up.railway.app/bins"
     },
     {
-      "source": "/locations/:path*",
-      "destination": "https://ctfinal-production.up.railway.app/locations/:path*"
+      "source": "/bins/:path*",
+      "destination": "https://ctfinal-production.up.railway.app/bins/:path*"
     },
     {
       "source": "/locations",
       "destination": "https://ctfinal-production.up.railway.app/locations"
     },
     {
-      "source": "/orders/:path*",
-      "destination": "https://ctfinal-production.up.railway.app/orders/:path*"
+      "source": "/locations/:path*",
+      "destination": "https://ctfinal-production.up.railway.app/locations/:path*"
     },
     {
       "source": "/orders",
       "destination": "https://ctfinal-production.up.railway.app/orders"
     },
     {
-      "source": "/:path*",
-      "destination": "https://ctfinal-production.up.railway.app/:path*"
+      "source": "/orders/:path*",
+      "destination": "https://ctfinal-production.up.railway.app/orders/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://ctfinal-production.up.railway.app/health"
     }
   ]
 }

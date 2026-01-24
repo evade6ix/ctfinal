@@ -1,15 +1,16 @@
+// server/routes/orders-weekly.js
 import express from "express";
 
 const router = express.Router();
 
 /**
  * GET /api/orders-weekly
- * Groups seller orders by week using the extracted date field.
- * Requires the main /api/orders to already return { date: "YYYY-MM-DD" }.
+ * Groups seller orders by week using the normalized createdAt field.
+ * Relies on /api/orders returning { createdAt: ISO string }.
  */
 router.get("/", async (req, res) => {
   try {
-    // Fetch from your cached orders endpoint
+    // Fetch from your normalized orders endpoint
     const r = await fetch("http://localhost:3000/api/orders");
     const orders = await r.json();
 
@@ -17,26 +18,27 @@ router.get("/", async (req, res) => {
       return res.json([]);
     }
 
-    // helper → get week start (Monday)
-    const getWeekId = (dateStr) => {
-      if (!dateStr) return "unknown";
+    // helper → get week start (Monday) from createdAt
+    const getWeekId = (createdAt) => {
+      if (!createdAt) return "unknown";
 
-      const d = new Date(dateStr);
+      const d = new Date(createdAt);
       if (isNaN(d.getTime())) return "unknown";
 
-      // Convert to Monday-based week
+      // Convert to Monday-based week (current behavior)
       const day = d.getDay(); // Sun=0, Mon=1...
       const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-      const monday = new Date(d.setDate(diff));
+      const monday = new Date(d);
+      monday.setDate(diff);
 
       return monday.toISOString().substring(0, 10); // YYYY-MM-DD
     };
 
-    // Group by week
     const weeks = {};
 
     for (const o of orders) {
-      const weekId = getWeekId(o.date);
+      // 🔑 Use the new normalized field
+      const weekId = getWeekId(o.createdAt);
 
       if (!weeks[weekId]) {
         weeks[weekId] = {
@@ -52,12 +54,11 @@ router.get("/", async (req, res) => {
       weeks[weekId].orders.push(o);
     }
 
-    // Convert to clean array sorted by week desc
     const output = Object.values(weeks).sort(
       (a, b) => new Date(b.weekStart) - new Date(a.weekStart)
     );
 
-    // Add formatted totals
+    // Human-friendly total string
     output.forEach((w) => {
       w.totalValue = (w.totalValueCents / 100).toFixed(2);
     });

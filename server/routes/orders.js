@@ -36,8 +36,28 @@ router.get("/", async (req, res) => {
     }
 
     console.log("Fetched", allOrders.length, "orders");
+    if (allOrders.length > 0) {
+      console.log("DEBUG /api/orders sample order:", allOrders[0]);
+    }
 
     const mapped = allOrders.map((o) => {
+  // ✅ Prefer the created_at of the first order item
+  let rawCreated = null;
+
+  if (Array.isArray(o.order_items) && o.order_items.length > 0) {
+    rawCreated = o.order_items[0].created_at || null;
+  }
+
+  // 🔁 Fallback: derive a date from the order code (YYYYMMDDxxxx)
+  if (!rawCreated && o.code && o.code.length >= 8) {
+    const d = o.code.substring(0, 8); // e.g. "20260124"
+    const year = d.substring(0, 4);
+    const month = d.substring(4, 6);
+    const day = d.substring(6, 8);
+    // Build a UTC midnight timestamp so frontend can still format it
+    rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
+  }
+
   return {
     id: o.id, // numeric id used everywhere
     code: o.code,
@@ -46,8 +66,8 @@ router.get("/", async (req, res) => {
     buyer: o.buyer || null,
     size: o.size,
 
-    // ✅ REAL timestamp from CardTrader (UTC ISO string)
-    createdAt: o.created_at || o.date || null,
+    // ✅ Final createdAt value (UTC-ish ISO string)
+    createdAt: rawCreated,
 
     sellerTotalCents: o.seller_total?.cents ?? null,
     sellerTotalCurrency: o.seller_total?.currency ?? null,

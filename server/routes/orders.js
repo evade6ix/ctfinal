@@ -38,30 +38,24 @@ router.get("/", async (req, res) => {
     console.log("Fetched", allOrders.length, "orders");
 
     const mapped = allOrders.map((o) => {
-      // Extract date from code (YYYYMMDDxxxx)
-      let extractedDate = null;
-      if (o.code && o.code.length >= 8) {
-        const d = o.code.substring(0, 8);
-        extractedDate = `${d.substring(0, 4)}-${d.substring(
-          4,
-          6
-        )}-${d.substring(6, 8)}`;
-      }
+  return {
+    id: o.id, // numeric id used everywhere
+    code: o.code,
+    state: o.state,
+    orderAs: o.order_as,
+    buyer: o.buyer || null,
+    size: o.size,
 
-      return {
-        id: o.id, // numeric id used everywhere
-        code: o.code,
-        state: o.state,
-        orderAs: o.order_as,
-        buyer: o.buyer || null,
-        size: o.size,
-        date: extractedDate,
-        sellerTotalCents: o.seller_total?.cents ?? null,
-        sellerTotalCurrency: o.seller_total?.currency ?? null,
-        formattedTotal: o.formatted_total ?? null,
-        // allocated filled below
-      };
-    });
+    // ✅ REAL timestamp from CardTrader (UTC ISO string)
+    createdAt: o.created_at || o.date || null,
+
+    sellerTotalCents: o.seller_total?.cents ?? null,
+    sellerTotalCurrency: o.seller_total?.currency ?? null,
+    formattedTotal: o.formatted_total ?? null,
+    // allocated filled below
+  };
+});
+
 
     // 🔹 Figure out which orders already have allocations
     const orderIdStrings = mapped.map((o) => String(o.id));

@@ -118,14 +118,22 @@ export function OrdersView() {
     if (willExpand) loadItems(id);
   };
 
-  const getBuyerDisplay = (buyer?: Buyer | null) => {
+    const getBuyerDisplay = (buyer?: Buyer | null) => {
     if (!buyer) return "Unknown";
     if (buyer.username && buyer.country)
       return `${buyer.username} (${buyer.country})`;
     return buyer.username || buyer.country || "Unknown";
   };
 
-  const formatDate = (d?: string | null) => d || "-";
+  const formatLocalDate = (iso?: string | null) => {
+    if (!iso) return "-";
+
+    return new Date(iso).toLocaleString("en-CA", {
+      timeZone: "America/Toronto",
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  };
 
   const formatTotal = (o: OrderSummary) => {
     if (o.formattedTotal) return o.formattedTotal;
@@ -135,6 +143,7 @@ export function OrdersView() {
       }`;
     return "-";
   };
+
 
   // 🔹 sync allocated orders -> hits POST /api/orders/sync
   const handleSyncOrders = async () => {
@@ -276,7 +285,7 @@ export function OrdersView() {
 
                     <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
                     <Table.Td>{o.size ?? "-"}</Table.Td>
-                    <Table.Td>{formatDate(o.date)}</Table.Td>
+<Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
                     <Table.Td>{formatTotal(o)}</Table.Td>
 
                     <Table.Td>

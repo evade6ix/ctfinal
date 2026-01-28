@@ -30,7 +30,8 @@ type WeeklySummary = {
 
 type OrderItem = {
   id?: number;
-  cardTraderId?: number;
+  cardTraderId?: number; // may map to blueprint id
+  blueprintId?: number;  // if backend sends this later, we prefer it
   name?: string;
   quantity?: number;
   image_url?: string;
@@ -130,6 +131,23 @@ export function OrdersWeeklyGroupedView() {
 
       return aName.localeCompare(bName, undefined, { numeric: true });
     });
+  };
+
+  // 🔹 image selection with CardTrader fallback
+  const getCardImageSrc = (it: OrderItem) => {
+    // 1) Use explicit image_url if it looks valid
+    if (it.image_url && it.image_url.startsWith("http")) {
+      return it.image_url;
+    }
+
+    // 2) Otherwise, try blueprint/cardTrader id on CardTrader CDN
+    const blueprintId = it.blueprintId ?? it.cardTraderId;
+    if (blueprintId) {
+      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+    }
+
+    // 3) Final fallback: Scryfall placeholder
+    return "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
   };
 
   const loadItems = async (orderId: string | number) => {
@@ -313,7 +331,8 @@ export function OrdersWeeklyGroupedView() {
                                 )}
 
                                 {itemsByOrder[o.id] &&
-                                  itemsByOrder[o.id].length === 0 && !loadingItems && (
+                                  itemsByOrder[o.id].length === 0 &&
+                                  !loadingItems && (
                                     <Text c="dimmed" ta="center">
                                       No line items found.
                                     </Text>
@@ -335,20 +354,17 @@ export function OrdersWeeklyGroupedView() {
                                           >
                                             {/* IMAGE */}
                                             <img
-                                              src={
-                                                it.image_url ||
-                                                "https://cards.scryfall.io/large/front/0/1/placeholder.jpg"
-                                              }
+                                              src={getCardImageSrc(it)}
                                               width={50}
                                               height={70}
                                               style={{
                                                 objectFit: "cover",
                                                 borderRadius: 4,
                                               }}
-                                              onError={(e) =>
-                                                ((e.target as HTMLImageElement).src =
-                                                  "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
-                                              }
+                                              onError={(e) => {
+                                                (e.target as HTMLImageElement).src =
+                                                  "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
+                                              }}
                                             />
 
                                             {/* DETAILS */}

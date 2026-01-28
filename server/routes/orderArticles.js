@@ -15,10 +15,7 @@ async function getScryfallImage(cardName) {
   if (!cardName) return null;
   try {
     const resp = await axios.get("https://api.scryfall.com/cards/named", {
-      params: {
-        exact: cardName,
-        version: "normal",
-      },
+      params: { exact: cardName, version: "normal" },
       timeout: 4000,
     });
 
@@ -53,86 +50,61 @@ async function getScryfallImage(cardName) {
 
 /**
  * GET /api/order-articles/:id
- *
- * - Fetches a single CardTrader order header (/orders/:id)
- * - Uses order.order_items (CT already includes them)
- * - Allocates from your bins (once) & stores in OrderAllocation
- * - Always returns array of line items with:
- *   { id, cardTraderId, blueprintId, name, quantity, set_name, image_url, binLocations[] }
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const orderIdStr = String(id);
 
-  // allow background sync to skip Scryfall calls
   const skipImages = req.query.skipImages === "1";
   const debug = req.query.debug === "1";
 
   try {
     const client = ct();
 
-    console.log("🔎 Fetching CardTrader order for id:", id);
-
-    // 1️⃣ Fetch the single order (header + items inline)
+    // 1️⃣ Fetch the order
     const orderRes = await client.get(`/orders/${id}`);
-    console.log("✅ /orders/:id status:", orderRes.status);
     const order = orderRes.data || {};
 
-    // 2️⃣ Pull order_items directly from the order object
+    // 2️⃣ CT already gives items inline
     const rawItems = Array.isArray(order.order_items)
       ? order.order_items
       : [];
 
-    console.log("📦 order_items count:", rawItems.length);
-
-    // Optional debug: let you see raw CT payload
     if (debug) {
-      return res.json({
-        order,
-        order_items: rawItems,
-      });
+      return res.json({ order, order_items: rawItems });
     }
 
-    // 3️⃣ Base shape from CT API (one per order line)
+    // 3️⃣ Normalize base items
     const baseItems = rawItems.map((a) => ({
       id: a.id,
-      // listing / product id
       cardTraderId: a.product_id ?? null,
-
-      // we'll override this from Mongo if we have it
       blueprintId: null,
-
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
-      // CT calls it `expansion`; keep same key your UI expects
       set_name: a.expansion || null,
-
       image_url: null,
       binLocations: [],
     }));
 
-    // If there are truly no items, just short-circuit
-    if (!baseItems.length) {
-      return res.json([]);
-    }
+    if (!baseItems.length) return res.json([]);
 
-    // Collect all CT listing IDs
+    // 4️⃣ Gather CT IDs
     const ctIds = baseItems
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // If nothing has cardTraderId, just do Scryfall and return (unless skipping)
+    // If no valid CT IDs, only Scryfall is possible
     if (!ctIds.length) {
-      const finalNoBins = await Promise.all(
-        baseItems.map(async (it) => {
-          const image_url = skipImages ? null : await getScryfallImage(it.name);
-          return { ...it, image_url };
-        })
+      const finalNoCT = await Promise.all(
+        baseItems.map(async (it) => ({
+          ...it,
+          image_url: skipImages ? null : await getScryfallImage(it.name),
+        }))
       );
-      return res.json(finalNoBins);
+      return res.json(finalNoCT);
     }
 
-    // 4️⃣ Load inventory items for these cardTraderIds with bins populated
+    // 5️⃣ Inventory items for these CT listing IDs
     const dbItems = await InventoryItem.find({
       cardTraderId: { $in: ctIds },
     })
@@ -144,7 +116,7 @@ router.get("/:id", async (req, res) => {
       inventoryMap.set(Number(item.cardTraderId), item);
     }
 
-    // 5️⃣ Load existing allocations for this order (if already done before)
+    // 6️⃣ Previous allocations for this order
     const existingAllocations = await OrderAllocation.find({
       orderId: orderIdStr,
       cardTraderId: { $in: ctIds },
@@ -157,49 +129,55 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 6️⃣ Build final line items (allocate if needed, attach bins + images)
+    // 7️⃣ Build final lines
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
         const requestedQty = Number(it.quantity) || 0;
 
-        // Try to pull InventoryItem first (for image + locations)
         const invItem = Number.isFinite(ctId)
           ? inventoryMap.get(ctId)
           : null;
 
-        // Decide image_url: Mongo → CardTrader blueprint → Scryfall
-let image_url = null;
+        //
+        // 💥 IMAGE LOGIC — FIXED & CORRECT 💥
+        //
+        let image_url = null;
 
-if (!skipImages) {
-  // 1) Try Mongo imageUrl
-  if (invItem?.imageUrl) {
-    image_url = invItem.imageUrl;
-  }
+        if (!skipImages) {
+          // Try Mongo first
+          if (invItem?.imageUrl) {
+            image_url = invItem.imageUrl;
+          }
 
-  // 2) If no Mongo image, ALWAYS use CardTrader blueprint CDN
-  if (!image_url) {
-    const blueprint = invItem?.blueprintId ?? it.cardTraderId;
-    if (blueprint) {
-      image_url = `https://img.cardtrader.com/blueprints/${blueprint}/front.jpg`;
-    }
-  }
+          // If Mongo has no image, ALWAYS use CT CDN (blueprint)
+          if (!image_url) {
+            const blueprint = invItem?.blueprintId ?? it.cardTraderId;
+            if (blueprint) {
+              image_url = `https://img.cardtrader.com/blueprints/${blueprint}/front.jpg`;
+            }
+          }
 
-  // 3) Last resort → Scryfall
-  if (!image_url) {
-    image_url = await getScryfallImage(it.name);
-  }
-}
+          // Final fallback → Scryfall
+          if (!image_url) {
+            image_url = await getScryfallImage(it.name);
+          }
+        }
 
-
-        // Decide the blueprintId we send to the UI
-        // Prefer InventoryItem.blueprintId, fallback to CT listing id
+        // Now that image_url is set, compute blueprintId correctly
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
             : it.cardTraderId ?? null;
 
-        // If the line is weird / invalid, just return image + empty bins
+        // LAST guaranteed fallback: CT CDN
+        if (!image_url && resolvedBlueprintId) {
+          image_url = `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`;
+        }
+
+        //
+        // 🧱 VALIDATE ITEM
+        //
         if (!Number.isFinite(ctId) || requestedQty <= 0) {
           return {
             ...it,
@@ -209,22 +187,21 @@ if (!skipImages) {
           };
         }
 
-        // If we already have an allocation (order + cardTraderId),
-        // reuse it and DON'T re-deduct from inventory.
+        //
+        // 🔄 ALREADY ALLOCATED?
+        //
         const existingAlloc = allocationMap.get(ctId);
         if (existingAlloc) {
           const binLocations = (existingAlloc.pickedLocations || []).map(
-            (pl) => {
-              const binValue =
+            (pl) => ({
+              bin:
                 (pl.bin && (pl.bin.label || pl.bin.name)) ||
-                (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
-
-              return {
-                bin: binValue,
-                row: pl.row,
-                quantity: pl.quantity,
-              };
-            }
+                (typeof pl.bin === "string"
+                  ? pl.bin
+                  : String(pl.bin || "?")),
+              row: pl.row,
+              quantity: pl.quantity,
+            })
           );
 
           return {
@@ -235,7 +212,9 @@ if (!skipImages) {
           };
         }
 
-        // Otherwise, we need to allocate from inventory *once*
+        //
+        // 🔄 NEED TO ALLOCATE NOW
+        //
         if (!invItem || !Array.isArray(invItem.locations)) {
           return {
             ...it,
@@ -245,7 +224,6 @@ if (!skipImages) {
           };
         }
 
-        // Allocate from bins using your strategy (largest qty first)
         const { pickedLocations, remainingLocations, unfilled } =
           allocateFromBins(invItem.locations || [], requestedQty);
 
@@ -258,13 +236,12 @@ if (!skipImages) {
           };
         }
 
-        // How many did we actually fulfill?
         const fulfilledQty = pickedLocations.reduce(
           (sum, loc) => sum + (loc.quantity || 0),
           0
         );
 
-        // 7️⃣ Update InventoryItem: locations + totalQuantity
+        // Update inventory
         invItem.locations = remainingLocations;
         invItem.totalQuantity = Math.max(
           0,
@@ -272,8 +249,8 @@ if (!skipImages) {
         );
         await invItem.save();
 
-        // 8️⃣ Save OrderAllocation so we don't re-allocate on future calls
-        const allocationDoc = new OrderAllocation({
+        // Save allocation
+        await new OrderAllocation({
           orderId: orderIdStr,
           orderCode: order.code || null,
           cardTraderId: ctId,
@@ -285,22 +262,18 @@ if (!skipImages) {
             row: pl.row,
             quantity: pl.quantity,
           })),
-        });
+        }).save();
 
-        await allocationDoc.save();
-
-        // Build binLocations for UI (with bin name/label + row + qty)
-        const binLocations = pickedLocations.map((pl) => {
-          const binValue =
+        // Build output binLocations
+        const binLocations = pickedLocations.map((pl) => ({
+          bin:
             (pl.bin && (pl.bin.label || pl.bin.name)) ||
-            (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
-
-          return {
-            bin: binValue,
-            row: pl.row,
-            quantity: pl.quantity,
-          };
-        });
+            (typeof pl.bin === "string"
+              ? pl.bin
+              : String(pl.bin || "?")),
+          row: pl.row,
+          quantity: pl.quantity,
+        }));
 
         return {
           ...it,

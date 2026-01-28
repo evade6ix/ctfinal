@@ -7,6 +7,7 @@ const router = express.Router();
  * GET /api/orders-weekly
  * Groups seller orders by week using the normalized createdAt field.
  * Relies on /api/orders returning { createdAt: ISO string }.
+ * Only includes orders with state === "paid".
  */
 router.get("/", async (req, res) => {
   try {
@@ -35,6 +36,12 @@ router.get("/", async (req, res) => {
       return res.json([]);
     }
 
+    // ✅ Only keep PAID orders for weekly shipments
+    const paidOrders = orders.filter((o) => {
+      const state = String(o.state || "").toLowerCase();
+      return state === "paid";
+    });
+
     // helper → get week start (Monday) from createdAt
     const getWeekId = (createdAt) => {
       if (!createdAt) return "unknown";
@@ -53,7 +60,7 @@ router.get("/", async (req, res) => {
 
     const weeks = {};
 
-    for (const o of orders) {
+    for (const o of paidOrders) {
       // 🔑 Use the normalized createdAt field
       const weekId = getWeekId(o.createdAt);
 
@@ -82,16 +89,17 @@ router.get("/", async (req, res) => {
 
     console.log(
       `[/api/orders-weekly] computed ${output.length} weeks from ${
-        orders.length
-      } orders`
+        paidOrders.length
+      } PAID orders (raw orders: ${orders.length})`
     );
 
     res.json(output);
   } catch (err) {
     console.error("❌ weekly error:", err);
-    res
-      .status(500)
-      .json({ error: "Failed to compute weekly shipments", details: err.message });
+    res.status(500).json({
+      error: "Failed to compute weekly shipments",
+      details: err.message,
+    });
   }
 });
 

@@ -111,22 +111,28 @@ export function OrdersView() {
     }
   };
 
-  // ⭐⭐⭐ FIXED IMAGE SELECTOR – NO SCRYFALL EVER AGAIN ⭐⭐⭐
-  const getCardImageSrc = (it: OrderItem) => {
-    // 1) Pre-supplied backend/Mongo URL
-    if (it.image_url && it.image_url.startsWith("http")) {
-      return it.image_url;
-    }
+// ⭐ FIXED IMAGE SELECTOR – supports BOTH image_url + imageUrl ⭐
+const getCardImageSrc = (it: OrderItem) => {
+  // Accept BOTH backend formats
+  const dbImage =
+    it.image_url ||        // snake_case from /api/order-articles
+    (it as any).imageUrl;  // camelCase from MongoDB
 
-    // 2) CardTrader Blueprint CDN
-    const blueprintId = it.blueprintId ?? it.cardTraderId;
-    if (blueprintId) {
-      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-    }
+  // 1) Use DB image first
+  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+    return dbImage;
+  }
 
-    // 3) Local guaranteed placeholder
-    return "/card-placeholder.png";
-  };
+  // 2) Fallback → CardTrader Blueprint CDN
+  const blueprintId = it.blueprintId ?? it.cardTraderId;
+  if (blueprintId) {
+    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+  }
+
+  // 3) Final fallback → local placeholder
+  return "/card-placeholder.png";
+};
+
 
   const toggle = (id: string | number) => {
     const willExpand = expanded !== id;

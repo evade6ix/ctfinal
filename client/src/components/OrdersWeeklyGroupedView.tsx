@@ -139,9 +139,14 @@ export function OrdersWeeklyGroupedView() {
 
 // Image selection: DB image → CardTrader blueprint → local placeholder
 const getCardImageSrc = (it: OrderItem) => {
-  // 1) Explicit image_url from backend / Mongo
-  if (it.image_url && it.image_url.startsWith("http")) {
-    return it.image_url;
+  // Accept BOTH backend formats: image_url and imageUrl
+  const dbImage =
+    it.image_url ||        // snake_case from Express
+    (it as any).imageUrl;  // camelCase from Mongo
+
+  // 1) Use DB image first
+  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+    return dbImage;
   }
 
   // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
@@ -150,7 +155,7 @@ const getCardImageSrc = (it: OrderItem) => {
     return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
   }
 
-  // 3) Local / generic placeholder (you can point this to any image in /public)
+  // 3) FINAL fallback – your local placeholder
   return "/card-placeholder.png";
 };
 

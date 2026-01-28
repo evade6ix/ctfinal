@@ -36,20 +36,19 @@ type OrderSummary = {
 
   date?: string; // extracted YYYY-MM-DD
 
-  allocated?: boolean; // 🔹 new flag from backend
+  allocated?: boolean;
 };
 
 type OrderItem = {
   id?: number;
   cardTraderId?: number;
-  blueprintId?: number; // optional, if backend sends this later
+  blueprintId?: number;
   name?: string;
   quantity?: number;
   image_url?: string;
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
-
 
 export function OrdersView() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
@@ -61,7 +60,6 @@ export function OrdersView() {
     Record<string | number, OrderItem[]>
   >({});
 
-  // 🔹 new state for sync button
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -88,9 +86,8 @@ export function OrdersView() {
     fetchOrders();
   }, []);
 
-  // 🔥 use /api/order-articles/:id and always set itemsByOrder
   const loadItems = async (orderId: string | number) => {
-    if (itemsByOrder[orderId]) return; // cached
+    if (itemsByOrder[orderId]) return;
 
     try {
       const res = await fetch(`/api/order-articles/${orderId}`);
@@ -114,22 +111,22 @@ export function OrdersView() {
     }
   };
 
+  // ⭐⭐⭐ FIXED IMAGE SELECTOR – NO SCRYFALL EVER AGAIN ⭐⭐⭐
   const getCardImageSrc = (it: OrderItem) => {
-  // 1) Prefer the Mongo / inventory image_url
-  if (it.image_url && it.image_url.startsWith("http")) {
-    return it.image_url;
-  }
+    // 1) Pre-supplied backend/Mongo URL
+    if (it.image_url && it.image_url.startsWith("http")) {
+      return it.image_url;
+    }
 
-  // 2) Fall back to CardTrader blueprint/listing image if available
-  const blueprintId = it.blueprintId ?? it.cardTraderId;
-  if (blueprintId) {
-    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-  }
+    // 2) CardTrader Blueprint CDN
+    const blueprintId = it.blueprintId ?? it.cardTraderId;
+    if (blueprintId) {
+      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+    }
 
-  // 3) Final fallback: generic placeholder
-  return "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
-};
-
+    // 3) Local guaranteed placeholder
+    return "/card-placeholder.png";
+  };
 
   const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
@@ -146,7 +143,6 @@ export function OrdersView() {
 
   const formatLocalDate = (iso?: string | null) => {
     if (!iso) return "-";
-
     return new Date(iso).toLocaleString("en-CA", {
       timeZone: "America/Toronto",
       dateStyle: "medium",
@@ -163,17 +159,14 @@ export function OrdersView() {
     return "-";
   };
 
-  // 🔹 sort items: bins first (by bin → row), then no-bin by set_name → name
   const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     return [...items].sort((a, b) => {
       const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
       const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
 
-      // 1) Items WITH bins first
       if (aHasBin && !bHasBin) return -1;
       if (!aHasBin && bHasBin) return 1;
 
-      // 2) If both HAVE bins → sort by bin name then row
       if (aHasBin && bHasBin) {
         const aLoc = a.binLocations![0];
         const bLoc = b.binLocations![0];
@@ -181,41 +174,30 @@ export function OrdersView() {
         const aBin = (aLoc.bin || "").toString();
         const bBin = (bLoc.bin || "").toString();
 
-        if (aBin !== bBin) {
-          return aBin.localeCompare(bBin, undefined, { numeric: true });
-        }
+        if (aBin !== bBin) return aBin.localeCompare(bBin, undefined, { numeric: true });
 
         const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
         const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
-
         return aRow - bRow;
       }
 
-      // 3) Neither has bins → group/sort by set_name, then name
       const aSet = (a.set_name || "").toString();
       const bSet = (b.set_name || "").toString();
-
-      if (aSet !== bSet) {
-        return aSet.localeCompare(bSet, undefined, { numeric: true });
-      }
+      if (aSet !== bSet) return aSet.localeCompare(bSet, undefined, { numeric: true });
 
       const aName = (a.name || "").toString();
       const bName = (b.name || "").toString();
-
       return aName.localeCompare(bName, undefined, { numeric: true });
     });
   };
 
-  // 🔹 sync allocated orders -> hits POST /api/orders/sync
   const handleSyncOrders = async () => {
     try {
       setSyncing(true);
       setSyncMessage(null);
       setSyncError(null);
 
-      const res = await fetch("/api/orders/sync", {
-        method: "POST",
-      });
+      const res = await fetch("/api/orders/sync", { method: "POST" });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -228,7 +210,6 @@ export function OrdersView() {
           `Sync complete. Updated ${data.updatedLines ?? 0} order lines.`
       );
 
-      // Optional: refetch orders so allocated flags / totals refresh
       fetchOrders();
     } catch (err: any) {
       console.error("Sync failed:", err);
@@ -309,7 +290,6 @@ export function OrdersView() {
 
               {orders.map((o) => (
                 <>
-                  {/* MAIN ORDER ROW */}
                   <Table.Tr
                     key={o.id}
                     onClick={() => toggle(o.id)}
@@ -363,7 +343,6 @@ export function OrdersView() {
                     </Table.Td>
                   </Table.Tr>
 
-                  {/* EXPANDED VIEW */}
                   {expanded === o.id && (
                     <Table.Tr key={`${o.id}-expanded`}>
                       <Table.Td
@@ -375,14 +354,12 @@ export function OrdersView() {
                         }}
                       >
                         <Box p="md">
-                          {/* LOADING */}
                           {!itemsByOrder[o.id] && (
                             <Group justify="center" p="lg">
                               <Loader size="sm" color="yellow" />
                             </Group>
                           )}
 
-                          {/* NO ITEMS */}
                           {itemsByOrder[o.id] &&
                             itemsByOrder[o.id].length === 0 && (
                               <Text c="dimmed" ta="center">
@@ -390,7 +367,6 @@ export function OrdersView() {
                               </Text>
                             )}
 
-                          {/* ITEMS */}
                           {itemsByOrder[o.id] &&
                             itemsByOrder[o.id].length > 0 && (
                               <Stack gap="md">
@@ -405,22 +381,21 @@ export function OrdersView() {
                                         borderBottom: "1px solid #333",
                                       }}
                                     >
-                                      {/* IMAGE */}
-<img
-  src={getCardImageSrc(it)}
-  width={50}
-  height={70}
-  style={{
-    objectFit: "cover",
-    borderRadius: 4,
-  }}
-  onError={(e) =>
-    ((e.target as HTMLImageElement).src =
-      "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
-  }
-/>
+                                      {/* ⭐ Fixed image element ⭐ */}
+                                      <img
+                                        src={getCardImageSrc(it)}
+                                        width={50}
+                                        height={70}
+                                        style={{
+                                          objectFit: "cover",
+                                          borderRadius: 4,
+                                        }}
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).src =
+                                            "/card-placeholder.png";
+                                        }}
+                                      />
 
-                                      {/* DETAILS */}
                                       <Box style={{ flex: 1 }}>
                                         <Text fw={500}>
                                           {it.name || "No name"}
@@ -433,7 +408,6 @@ export function OrdersView() {
                                           Qty: {it.quantity ?? "?"}
                                         </Text>
 
-                                        {/* BIN LOCATIONS */}
                                         <Group gap={6} mt={6}>
                                           {(it.binLocations || []).map(
                                             (b, i) => (

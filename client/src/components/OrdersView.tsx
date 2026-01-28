@@ -42,12 +42,14 @@ type OrderSummary = {
 type OrderItem = {
   id?: number;
   cardTraderId?: number;
+  blueprintId?: number; // optional, if backend sends this later
   name?: string;
   quantity?: number;
   image_url?: string;
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
+
 
 export function OrdersView() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
@@ -111,6 +113,23 @@ export function OrdersView() {
       }));
     }
   };
+
+  const getCardImageSrc = (it: OrderItem) => {
+  // 1) Prefer the Mongo / inventory image_url
+  if (it.image_url && it.image_url.startsWith("http")) {
+    return it.image_url;
+  }
+
+  // 2) Fall back to CardTrader blueprint/listing image if available
+  const blueprintId = it.blueprintId ?? it.cardTraderId;
+  if (blueprintId) {
+    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+  }
+
+  // 3) Final fallback: generic placeholder
+  return "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
+};
+
 
   const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
@@ -387,22 +406,19 @@ export function OrdersView() {
                                       }}
                                     >
                                       {/* IMAGE */}
-                                      <img
-                                        src={
-                                          it.image_url ||
-                                          "https://cards.scryfall.io/large/front/0/1/placeholder.jpg"
-                                        }
-                                        width={50}
-                                        height={70}
-                                        style={{
-                                          objectFit: "cover",
-                                          borderRadius: 4,
-                                        }}
-                                        onError={(e) =>
-                                          ((e.target as HTMLImageElement).src =
-                                            "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
-                                        }
-                                      />
+<img
+  src={getCardImageSrc(it)}
+  width={50}
+  height={70}
+  style={{
+    objectFit: "cover",
+    borderRadius: 4,
+  }}
+  onError={(e) =>
+    ((e.target as HTMLImageElement).src =
+      "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
+  }
+/>
 
                                       {/* DETAILS */}
                                       <Box style={{ flex: 1 }}>

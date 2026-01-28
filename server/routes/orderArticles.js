@@ -125,124 +125,137 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 5️⃣ Build final response items: use saved allocations if they exist,
-    // otherwise allocate from bins (once), update inventory, and save allocation.
     const final = await Promise.all(
-      baseItems.map(async (it) => {
-        const ctId = Number(it.cardTraderId);
-        const requestedQty = Number(it.quantity) || 0;
+  baseItems.map(async (it) => {
+    const ctId = Number(it.cardTraderId);
+    const requestedQty = Number(it.quantity) || 0;
 
-        // ✅ Only call Scryfall for UI usage; background sync skips it
-        const image_url = skipImages ? null : await getScryfallImage(it.name);
+    // 🔹 Try to pull InventoryItem first (even if we already have an allocation)
+    const invItem = Number.isFinite(ctId)
+      ? inventoryMap.get(ctId)
+      : null;
 
-        if (!Number.isFinite(ctId) || requestedQty <= 0) {
-          return {
-            ...it,
-            image_url,
-            binLocations: [],
-          };
-        }
+    // 🔹 Decide the image_url:
+    // 1) If skipImages=1 → always null
+    // 2) Else prefer Mongo's imageUrl
+    // 3) Fallback to Scryfall only if Mongo has no image
+    let image_url = null;
+    if (!skipImages) {
+      if (invItem?.imageUrl) {
+        image_url = invItem.imageUrl;
+      } else {
+        image_url = await getScryfallImage(it.name);
+      }
+    }
 
-        // If we already have an allocation for this (order + cardTraderId),
-        // reuse it and DON'T re-deduct from inventory.
-        const existingAlloc = allocationMap.get(ctId);
-        if (existingAlloc) {
-          const binLocations = (existingAlloc.pickedLocations || []).map((pl) => {
-            const binValue =
-              (pl.bin && (pl.bin.label || pl.bin.name)) ||
-              (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
+    // If the line is weird / invalid, just return image + empty bins
+    if (!Number.isFinite(ctId) || requestedQty <= 0) {
+      return {
+        ...it,
+        image_url,
+        binLocations: [],
+      };
+    }
 
-            return {
-              bin: binValue,
-              row: pl.row,
-              quantity: pl.quantity,
-            };
-          });
-
-          return {
-            ...it,
-            image_url,
-            binLocations,
-          };
-        }
-
-        // Otherwise, we need to allocate from inventory *once*
-        const invItem = inventoryMap.get(ctId);
-
-        if (!invItem || !Array.isArray(invItem.locations)) {
-          return {
-            ...it,
-            image_url,
-            binLocations: [],
-          };
-        }
-
-        // Allocate from bins using your strategy (largest qty first)
-        const { pickedLocations, remainingLocations, unfilled } = allocateFromBins(
-          invItem.locations || [],
-          requestedQty
-        );
-
-        if (!pickedLocations.length) {
-          return {
-            ...it,
-            image_url,
-            binLocations: [],
-          };
-        }
-
-        // How many did we actually fulfill?
-        const fulfilledQty = pickedLocations.reduce(
-          (sum, loc) => sum + (loc.quantity || 0),
-          0
-        );
-
-        // 6️⃣ Update InventoryItem: locations + totalQuantity
-        invItem.locations = remainingLocations;
-        invItem.totalQuantity = Math.max(
-          0,
-          (invItem.totalQuantity || 0) - fulfilledQty
-        );
-
-        await invItem.save();
-
-        // 7️⃣ Save OrderAllocation so we don't re-allocate on future calls
-        const allocationDoc = new OrderAllocation({
-          orderId: orderIdStr,
-          orderCode: order.code || null,
-          cardTraderId: ctId,
-          requestedQuantity: requestedQty,
-          fulfilledQuantity: fulfilledQty,
-          unfilled,
-          pickedLocations: pickedLocations.map((pl) => ({
-            bin: pl.bin?._id || pl.bin,
-            row: pl.row,
-            quantity: pl.quantity,
-          })),
-        });
-
-        await allocationDoc.save();
-
-        // Build binLocations for UI (with bin name/label + row + qty)
-        const binLocations = pickedLocations.map((pl) => {
-          const binValue =
-            (pl.bin && (pl.bin.label || pl.bin.name)) ||
-            (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
-
-          return {
-            bin: binValue,
-            row: pl.row,
-            quantity: pl.quantity,
-          };
-        });
+    // If we already have an allocation for this (order + cardTraderId),
+    // reuse it and DON'T re-deduct from inventory.
+    const existingAlloc = allocationMap.get(ctId);
+    if (existingAlloc) {
+      const binLocations = (existingAlloc.pickedLocations || []).map((pl) => {
+        const binValue =
+          (pl.bin && (pl.bin.label || pl.bin.name)) ||
+          (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
 
         return {
-          ...it,
-          image_url,
-          binLocations,
+          bin: binValue,
+          row: pl.row,
+          quantity: pl.quantity,
         };
-      })
+      });
+
+      return {
+        ...it,
+        image_url,
+        binLocations,
+      };
+    }
+
+    // Otherwise, we need to allocate from inventory *once*
+    if (!invItem || !Array.isArray(invItem.locations)) {
+      return {
+        ...it,
+        image_url,
+        binLocations: [],
+      };
+    }
+
+    // Allocate from bins using your strategy (largest qty first)
+    const { pickedLocations, remainingLocations, unfilled } = allocateFromBins(
+      invItem.locations || [],
+      requestedQty
     );
+
+    if (!pickedLocations.length) {
+      return {
+        ...it,
+        image_url,
+        binLocations: [],
+      };
+    }
+
+    // How many did we actually fulfill?
+    const fulfilledQty = pickedLocations.reduce(
+      (sum, loc) => sum + (loc.quantity || 0),
+      0
+    );
+
+    // 6️⃣ Update InventoryItem: locations + totalQuantity
+    invItem.locations = remainingLocations;
+    invItem.totalQuantity = Math.max(
+      0,
+      (invItem.totalQuantity || 0) - fulfilledQty
+    );
+
+    await invItem.save();
+
+    // 7️⃣ Save OrderAllocation so we don't re-allocate on future calls
+    const allocationDoc = new OrderAllocation({
+      orderId: orderIdStr,
+      orderCode: order.code || null,
+      cardTraderId: ctId,
+      requestedQuantity: requestedQty,
+      fulfilledQuantity: fulfilledQty,
+      unfilled,
+      pickedLocations: pickedLocations.map((pl) => ({
+        bin: pl.bin?._id || pl.bin,
+        row: pl.row,
+        quantity: pl.quantity,
+      })),
+    });
+
+    await allocationDoc.save();
+
+    // Build binLocations for UI (with bin name/label + row + qty)
+    const binLocations = pickedLocations.map((pl) => {
+      const binValue =
+        (pl.bin && (pl.bin.label || pl.bin.name)) ||
+        (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?"));
+
+      return {
+        bin: binValue,
+        row: pl.row,
+        quantity: pl.quantity,
+      };
+    });
+
+    return {
+      ...it,
+      image_url,
+      binLocations,
+    };
+  })
+);
+
 
     return res.json(final);
   } catch (err) {

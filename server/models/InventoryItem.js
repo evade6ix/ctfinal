@@ -27,12 +27,15 @@ const inventoryItemSchema = new mongoose.Schema(
     // CardTrader / card identifiers
     cardTraderId: { type: Number, index: true },
 
-    // NEW FIELD – for backfilling setCode using blueprint metadata
+    // For linking to CT blueprints
     blueprintId: { type: Number, index: true },
 
     game: { type: String },
     setCode: { type: String },
     name: { type: String },
+
+    // Image from CardTrader blueprint
+    imageUrl: { type: String, default: null },   // 👈 NEW FIELD
 
     // Pricing info from CardTrader
     condition: { type: String },
@@ -52,5 +55,7 @@ const inventoryItemSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const InventoryItem = mongoose.model("InventoryItem", inventoryItemSchema);
-
+export const InventoryItem = mongoose.model(
+  "InventoryItem",
+  inventoryItemSchema
+);

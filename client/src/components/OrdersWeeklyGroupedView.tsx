@@ -30,8 +30,8 @@ type WeeklySummary = {
 
 type OrderItem = {
   id?: number;
-  cardTraderId?: number; // may map to blueprint id
-  blueprintId?: number; // if backend sends this later, we prefer it
+  cardTraderId?: number;
+  blueprintId?: number;
   name?: string;
   quantity?: number;
   image_url?: string;
@@ -43,15 +43,19 @@ export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // per-order card drilldown
   const [expandedOrderId, setExpandedOrderId] = useState<
     string | number | null
   >(null);
+
   const [itemsByOrder, setItemsByOrder] = useState<
     Record<string | number, OrderItem[]>
   >({});
+
   const [loadingItems, setLoadingItems] = useState(false);
 
+  // ───────────────────────────────────────────────
+  // Initial weekly summaries
+  // ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -90,7 +94,7 @@ export function OrdersWeeklyGroupedView() {
     return `${startStr} – ${endStr}`;
   };
 
-  // 🔹 sort items: bins first (by bin → row), then no-bin by set_name → name
+  // Sort items: bins first (by bin → row), then no-bin by set_name → name
   const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     return [...items].sort((a, b) => {
       const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
@@ -133,23 +137,24 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
-  // 🔹 image selection with CardTrader fallback
+  // Image selection: DB image → CardTrader blueprint → placeholder
   const getCardImageSrc = (it: OrderItem) => {
-    // 1) Use explicit image_url if it looks valid
+    // 1) Explicit image_url from backend / Mongo
     if (it.image_url && it.image_url.startsWith("http")) {
       return it.image_url;
     }
 
-    // 2) Otherwise, try blueprint/cardTrader id on CardTrader CDN
+    // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
     const blueprintId = it.blueprintId ?? it.cardTraderId;
     if (blueprintId) {
       return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
     }
 
-    // 3) Final fallback: Scryfall placeholder
+    // 3) Local / generic placeholder
     return "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
   };
 
+  // Load items for a single order from /api/order-articles/:id
   const loadItems = async (orderId: string | number) => {
     if (itemsByOrder[orderId]) return; // already cached
 
@@ -168,8 +173,6 @@ export function OrdersWeeklyGroupedView() {
       }
 
       const data = (await res.json()) as OrderItem[];
-
-      // ✅ pre-sort once when we store them
       const sorted = sortOrderItems(data);
 
       setItemsByOrder((prev) => ({
@@ -248,7 +251,7 @@ export function OrdersWeeklyGroupedView() {
                 </Group>
               </Group>
 
-              {/* PAID ORDERS IN THIS WEEK */}
+              {/* PAID ORDERS FOR THIS WEEK */}
               {paidOrders.length > 0 ? (
                 <Table
                   withTableBorder
@@ -324,12 +327,14 @@ export function OrdersWeeklyGroupedView() {
                               }}
                             >
                               <Box p="md">
+                                {/* Loading state for this order */}
                                 {!itemsByOrder[o.id] && loadingItems && (
                                   <Group justify="center" p="lg">
                                     <Loader size="sm" />
                                   </Group>
                                 )}
 
+                                {/* No line items */}
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length === 0 &&
                                   !loadingItems && (
@@ -338,6 +343,7 @@ export function OrdersWeeklyGroupedView() {
                                     </Text>
                                   )}
 
+                                {/* Line items */}
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length > 0 && (
                                     <Stack gap="md">
@@ -364,6 +370,7 @@ export function OrdersWeeklyGroupedView() {
                                               (e.target as HTMLImageElement).src =
                                                 "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
                                             }}
+                                            alt={it.name || "Card image"}
                                           />
 
                                           {/* DETAILS */}

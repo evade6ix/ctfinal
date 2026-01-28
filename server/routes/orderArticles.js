@@ -10,6 +10,7 @@ const router = express.Router();
 
 /**
  * Helper: Scryfall lookup by exact card name
+ * (Only used when we truly have NO CardTrader IDs at all)
  */
 async function getScryfallImage(cardName) {
   if (!cardName) return null;
@@ -93,7 +94,7 @@ router.get("/:id", async (req, res) => {
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // If no valid CT IDs, only Scryfall is possible
+    // If no valid CT IDs, only Scryfall is possible (edge case)
     if (!ctIds.length) {
       const finalNoCT = await Promise.all(
         baseItems.map(async (it) => ({
@@ -139,40 +140,26 @@ router.get("/:id", async (req, res) => {
           ? inventoryMap.get(ctId)
           : null;
 
-        //
-        // 💥 IMAGE LOGIC — FIXED & CORRECT 💥
-        //
-        let image_url = null;
-
-        if (!skipImages) {
-          // Try Mongo first
-          if (invItem?.imageUrl) {
-            image_url = invItem.imageUrl;
-          }
-
-          // If Mongo has no image, ALWAYS use CT CDN (blueprint)
-          if (!image_url) {
-            const blueprint = invItem?.blueprintId ?? it.cardTraderId;
-            if (blueprint) {
-              image_url = `https://img.cardtrader.com/blueprints/${blueprint}/front.jpg`;
-            }
-          }
-
-          // Final fallback → Scryfall
-          if (!image_url) {
-            image_url = await getScryfallImage(it.name);
-          }
-        }
-
-        // Now that image_url is set, compute blueprintId correctly
+        // 🔹 Decide blueprintId first – prefer Mongo, then fall back to CT id
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
             : it.cardTraderId ?? null;
 
-        // LAST guaranteed fallback: CT CDN
-        if (!image_url && resolvedBlueprintId) {
-          image_url = `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`;
+        //
+        // 💥 IMAGE LOGIC — CardTrader / Mongo ONLY 💥
+        //
+        let image_url = null;
+
+        if (!skipImages) {
+          // 1) Prefer Mongo imageUrl if it’s a full HTTP(S) URL
+          if (invItem?.imageUrl && /^https?:\/\//.test(invItem.imageUrl)) {
+            image_url = invItem.imageUrl;
+          } else if (resolvedBlueprintId) {
+            // 2) Otherwise, always use CardTrader blueprint CDN
+            image_url = `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`;
+          }
+          // ⚠️ No Scryfall here – Catalog + Orders stay visually consistent.
         }
 
         //

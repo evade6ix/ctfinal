@@ -1,5 +1,4 @@
-import { useEffect, useState, Fragment, type ChangeEvent } from "react";
-import * as XLSX from "xlsx";
+import { useEffect, useState, Fragment } from "react";
 import {
   Badge,
   Box,
@@ -40,46 +39,6 @@ type OrderItem = {
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
 
-// Shape we pull from the CardTrader XLS picklist
-type XlsRow = {
-  setName?: string;
-  setCode?: string;
-  itemName?: string;
-  quantity?: number;
-  condition?: string;
-  language?: string;
-  collectorNumber?: string | number;
-};
-
-const normalize = (s?: string | null) =>
-  s ? s.toString().trim().replace(/\s+/g, " ").toLowerCase() : "";
-
-// Try to match an order line to a row in the XLS by name + set (+ qty)
-const matchXlsRow = (item: OrderItem, rows: XlsRow[]): XlsRow | null => {
-  const nName = normalize(item.name);
-  const nSet = normalize(item.set_name);
-
-  if (!nName) return null;
-
-  let candidates = rows.filter((r) => normalize(r.itemName) === nName);
-
-  if (nSet) {
-    const bySet = candidates.filter((r) => normalize(r.setName) === nSet);
-    if (bySet.length > 0) {
-      candidates = bySet;
-    }
-  }
-
-  if (candidates.length > 1 && typeof item.quantity === "number") {
-    const byQty = candidates.filter((r) => r.quantity === item.quantity);
-    if (byQty.length > 0) {
-      candidates = byQty;
-    }
-  }
-
-  return candidates[0] || null;
-};
-
 export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -97,15 +56,6 @@ export function OrdersWeeklyGroupedView() {
   // ✅ In-memory "picked" state: per orderId → per index
   const [pickedByOrder, setPickedByOrder] = useState<
     Record<string | number, Record<number, boolean>>
-  >({});
-
-  // ✅ XLS rows per order (in-memory only)
-  const [xlsByOrder, setXlsByOrder] = useState<
-    Record<string | number, XlsRow[]>
-  >({});
-
-  const [xlsErrorByOrder, setXlsErrorByOrder] = useState<
-    Record<string | number, string | null>
   >({});
 
   // ───────────────────────────────────────────────
@@ -213,7 +163,9 @@ export function OrdersWeeklyGroupedView() {
 
     try {
       setLoadingItems(true);
-      const res = await fetch(`/api/order-articles/${orderId}?skipImages=1`);
+      const res = await fetch(
+        `/api/order-articles/${orderId}?skipImages=1`
+      );
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
@@ -342,64 +294,12 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
-  // Handle Excel upload for a specific order (front-end only)
-  const handleXlsUpload = async (
-    orderId: string | number,
-    event: ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: null });
-
-      const rows: XlsRow[] = json.map((row) => ({
-        setName: row["Set Name"] ?? row["set_name"],
-        setCode: row["Set Code"] ?? row["set_code"],
-        itemName: row["Item Name"] ?? row["item_name"],
-        quantity:
-          typeof row["Quantity"] === "number"
-            ? row["Quantity"]
-            : row["Quantity"] != null
-            ? Number(row["Quantity"]) || undefined
-            : undefined,
-        condition: row["Condition"] ?? row["condition"],
-        language: row["Language"] ?? row["language"],
-        collectorNumber:
-          row["Collector Number"] ?? row["collector_number"] ?? undefined,
-      }));
-
-      setXlsByOrder((prev) => ({
-        ...prev,
-        [orderId]: rows,
-      }));
-      setXlsErrorByOrder((prev) => ({
-        ...prev,
-        [orderId]: null,
-      }));
-    } catch (err) {
-      console.error("Error parsing XLS for order", orderId, err);
-      setXlsErrorByOrder((prev) => ({
-        ...prev,
-        [orderId]:
-          "Failed to read Excel file. Make sure it's the CardTrader picklist export.",
-      }));
-    } finally {
-      // reset input so you can upload the same file again if needed
-      event.target.value = "";
-    }
-  };
-
   return (
     <Stack gap="md">
       <Title order={3}>CardTrader Zero – Weekly Shipments</Title>
       <Text size="sm" c="dimmed">
         Every Wednesday → Tuesday. All PAID orders combined. Click an order to
-        see its cards sorted by bin and row. Images load on demand. You can
-        attach the CardTrader Excel picklist for extra data.
+        see its cards sorted by bin and row. Images load on demand.
       </Text>
 
       {loading && (
@@ -476,328 +376,250 @@ export function OrdersWeeklyGroupedView() {
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {paidOrders.map((o) => {
-                      const xlsRows = xlsByOrder[o.id] || [];
-                      const xlsError = xlsErrorByOrder[o.id] || null;
+                    {paidOrders.map((o) => (
+                      <Fragment key={o.id}>
+                        {/* MAIN ORDER ROW */}
+                        <Table.Tr
+                          style={{ cursor: "pointer" }}
+                          onClick={() => handleToggleOrder(o.id)}
+                        >
+                          <Table.Td>{o.code}</Table.Td>
+                          <Table.Td>
+                            <Badge color="green" variant="filled" size="xs">
+                              {String(o.state || "").toUpperCase()}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            {o.createdAt
+                              ? new Date(o.createdAt).toLocaleString("en-CA", {
+                                  dateStyle: "medium",
+                                  timeStyle: "short",
+                                })
+                              : "-"}
+                          </Table.Td>
+                          <Table.Td>{o.formattedTotal ?? "-"}</Table.Td>
+                          <Table.Td>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleOrder(o.id);
+                              }}
+                            >
+                              {expandedOrderId === o.id
+                                ? "Hide cards"
+                                : "View cards"}
+                            </Button>
+                          </Table.Td>
+                        </Table.Tr>
 
-                      return (
-                        <Fragment key={o.id}>
-                          {/* MAIN ORDER ROW */}
-                          <Table.Tr
-                            style={{ cursor: "pointer" }}
-                            onClick={() => handleToggleOrder(o.id)}
-                          >
-                            <Table.Td>{o.code}</Table.Td>
-                            <Table.Td>
-                              <Badge color="green" variant="filled" size="xs">
-                                {String(o.state || "").toUpperCase()}
-                              </Badge>
-                            </Table.Td>
-                            <Table.Td>
-                              {o.createdAt
-                                ? new Date(o.createdAt).toLocaleString(
-                                    "en-CA",
-                                    {
-                                      dateStyle: "medium",
-                                      timeStyle: "short",
-                                    }
-                                  )
-                                : "-"}
-                            </Table.Td>
-                            <Table.Td>{o.formattedTotal ?? "-"}</Table.Td>
-                            <Table.Td>
-                              <Button
-                                size="xs"
-                                variant="light"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleToggleOrder(o.id);
-                                }}
-                              >
-                                {expandedOrderId === o.id
-                                  ? "Hide cards"
-                                  : "View cards"}
-                              </Button>
-                            </Table.Td>
-                          </Table.Tr>
-
-                          {/* EXPANDED CARDS ROW */}
-                          {expandedOrderId === o.id && (
-                            <Table.Tr>
-                              <Table.Td
-                                colSpan={5}
-                                style={{
-                                  background: "#111",
-                                  padding: 0,
-                                  borderTop: "2px solid #333",
-                                }}
-                              >
-                                <Box p="md">
-                                  {/* XLS UPLOAD BAR FOR THIS ORDER */}
-                                  <Group
-                                    mb="sm"
-                                    justify="space-between"
-                                    align="center"
-                                  >
-                                    <Stack gap={2}>
-                                      <Text size="sm" fw={500}>
-                                        Excel picklist (optional)
-                                      </Text>
-                                      <Text size="xs" c="dimmed">
-                                        Attach the CardTrader XLS/XLSX export
-                                        for this order to see set code, collector
-                                        number, etc. (UI only – no inventory
-                                        changes).
-                                      </Text>
-                                    </Stack>
-
-                                    <Stack gap={4} align="flex-end">
-                                      <input
-                                        type="file"
-                                        accept=".xls,.xlsx"
-                                        onChange={(e) =>
-                                          handleXlsUpload(o.id, e)
-                                        }
-                                        style={{ maxWidth: 220 }}
-                                      />
-                                      <Text size="xs" c="dimmed">
-                                        {xlsRows.length > 0
-                                          ? `Loaded ${xlsRows.length} rows`
-                                          : "No XLS attached"}
-                                      </Text>
-                                      {xlsError && (
-                                        <Text size="xs" c="red">
-                                          {xlsError}
-                                        </Text>
-                                      )}
-                                    </Stack>
+                        {/* EXPANDED CARDS ROW */}
+                        {expandedOrderId === o.id && (
+                          <Table.Tr>
+                            <Table.Td
+                              colSpan={5}
+                              style={{
+                                background: "#111",
+                                padding: 0,
+                                borderTop: "2px solid #333",
+                              }}
+                            >
+                              <Box p="md">
+                                {/* Loading state for this order */}
+                                {!itemsByOrder[o.id] && loadingItems && (
+                                  <Group justify="center" p="lg">
+                                    <Loader size="sm" />
                                   </Group>
+                                )}
 
-                                  {/* Loading state for this order */}
-                                  {!itemsByOrder[o.id] && loadingItems && (
-                                    <Group justify="center" p="lg">
-                                      <Loader size="sm" />
-                                    </Group>
+                                {/* No line items */}
+                                {itemsByOrder[o.id] &&
+                                  itemsByOrder[o.id].length === 0 &&
+                                  !loadingItems && (
+                                    <Text c="dimmed" ta="center">
+                                      No line items found.
+                                    </Text>
                                   )}
 
-                                  {/* No line items */}
-                                  {itemsByOrder[o.id] &&
-                                    itemsByOrder[o.id].length === 0 &&
-                                    !loadingItems && (
-                                      <Text c="dimmed" ta="center">
-                                        No line items found.
-                                      </Text>
-                                    )}
+                                {/* Line items – all at once, images on demand */}
+                                {itemsByOrder[o.id] &&
+                                  itemsByOrder[o.id].length > 0 && (
+                                    <Stack gap="md">
+                                      {itemsByOrder[o.id].map(
+                                        (it, idx) => {
+                                          const isPicked =
+                                            !!pickedByOrder[o.id]?.[idx];
 
-                                  {/* Line items – all at once, images on demand */}
-                                  {itemsByOrder[o.id] &&
-                                    itemsByOrder[o.id].length > 0 && (
-                                      <Stack gap="md">
-                                        {itemsByOrder[o.id].map(
-                                          (it, idx) => {
-                                            const isPicked =
-                                              !!pickedByOrder[o.id]?.[idx];
-                                            const xlsMatch = matchXlsRow(
-                                              it,
-                                              xlsRows
-                                            );
-
-                                            return (
-                                              <Group
-                                                key={idx}
-                                                align="flex-start"
-                                                wrap="nowrap"
+                                          return (
+                                            <Group
+                                              key={idx}
+                                              align="flex-start"
+                                              wrap="nowrap"
+                                              style={{
+                                                padding: "8px 12px",
+                                                borderBottom:
+                                                  "1px solid #333",
+                                                background: isPicked
+                                                  ? "rgba(46, 204, 113, 0.12)" // soft green
+                                                  : "transparent",
+                                                borderLeft: isPicked
+                                                  ? "3px solid #2ecc71"
+                                                  : "3px solid transparent",
+                                                borderRadius: 4,
+                                              }}
+                                            >
+                                              {/* IMAGE + BUTTON */}
+                                              <Box
                                                 style={{
-                                                  padding: "8px 12px",
-                                                  borderBottom:
-                                                    "1px solid #333",
-                                                  background: isPicked
-                                                    ? "rgba(46, 204, 113, 0.12)" // soft green
-                                                    : "transparent",
-                                                  borderLeft: isPicked
-                                                    ? "3px solid #2ecc71"
-                                                    : "3px solid transparent",
-                                                  borderRadius: 4,
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  alignItems: "center",
+                                                  marginRight: 16,
                                                 }}
                                               >
-                                                {/* IMAGE + BUTTON */}
-                                                <Box
+                                                <img
+                                                  src={getCardImageSrc(it)}
+                                                  width={140}
+                                                  height={196}
                                                   style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    alignItems: "center",
-                                                    marginRight: 16,
+                                                    objectFit: "cover",
+                                                    borderRadius: 6,
                                                   }}
-                                                >
-                                                  <img
-                                                    src={getCardImageSrc(it)}
-                                                    width={140}
-                                                    height={196}
-                                                    style={{
-                                                      objectFit: "cover",
-                                                      borderRadius: 6,
-                                                    }}
-                                                    loading="lazy"
-                                                    decoding="async"
-                                                    onError={(e) => {
-                                                      (
-                                                        e.target as HTMLImageElement
-                                                      ).src =
-                                                        "/card-placeholder.png";
-                                                    }}
-                                                    alt={
-                                                      it.name || "Card image"
-                                                    }
-                                                  />
-                                                  <Button
-                                                    mt={6}
-                                                    size="xs"
-                                                    variant="subtle"
-                                                    onClick={() =>
-                                                      handleShowImage(
-                                                        o.id,
-                                                        idx,
-                                                        it
-                                                      )
-                                                    }
-                                                  >
-                                                    Show image
-                                                  </Button>
-                                                </Box>
-
-                                                {/* DETAILS + PICKED BUTTONS */}
-                                                <Box
-                                                  style={{
-                                                    flex: 1,
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    gap: 6,
+                                                  loading="lazy"
+                                                  decoding="async"
+                                                  onError={(e) => {
+                                                    (
+                                                      e.target as HTMLImageElement
+                                                    ).src =
+                                                      "/card-placeholder.png";
                                                   }}
+                                                  alt={
+                                                    it.name || "Card image"
+                                                  }
+                                                />
+                                                <Button
+                                                  mt={6}
+                                                  size="xs"
+                                                  variant="subtle"
+                                                  onClick={() =>
+                                                    handleShowImage(
+                                                      o.id,
+                                                      idx,
+                                                      it
+                                                    )
+                                                  }
                                                 >
-                                                  <Group
-                                                    justify="space-between"
-                                                    align="flex-start"
-                                                    wrap="nowrap"
-                                                  >
-                                                    <Box style={{ flex: 1 }}>
-                                                      <Text fw={500}>
-                                                        {it.name || "No name"}
-                                                      </Text>
-                                                      <Text
-                                                        size="xs"
-                                                        c="dimmed"
-                                                      >
-                                                        {it.set_name ||
-                                                          "Unknown set"}
-                                                      </Text>
+                                                  Show image
+                                                </Button>
+                                              </Box>
 
-                                                      {/* XLS match line */}
-                                                      {xlsMatch && (
-                                                        <Text
-                                                          size="xs"
-                                                          c="teal.2"
-                                                          mt={2}
-                                                        >
-                                                          XLS:{" "}
-                                                          {xlsMatch.setCode ||
-                                                            xlsMatch.setName ||
-                                                            "?"}
-                                                          {xlsMatch.collectorNumber !=
-                                                            null &&
-                                                            ` · #${xlsMatch.collectorNumber}`}
-                                                          {xlsMatch.condition &&
-                                                            ` · ${xlsMatch.condition}`}
-                                                          {xlsMatch.language &&
-                                                            ` · ${xlsMatch.language}`}
-                                                          {typeof xlsMatch.quantity ===
-                                                            "number" &&
-                                                            ` · Qty ${xlsMatch.quantity}`}
-                                                        </Text>
-                                                      )}
-
-                                                      <Text size="sm" mt={4}>
-                                                        Qty:{" "}
-                                                        {it.quantity ?? "?"}
-                                                      </Text>
-
-                                                      {/* BIN LOCATIONS */}
-                                                      <Group gap={6} mt={6}>
-                                                        {(
-                                                          it.binLocations || []
-                                                        ).map((b, i) => (
-                                                          <Badge
-                                                            key={i}
-                                                            color="yellow"
-                                                          >
-                                                            {b.bin ?? "?"} /
-                                                            Row{" "}
-                                                            {b.row ?? "?"} (x
-                                                            {b.quantity ?? "?"}
-                                                            )
-                                                          </Badge>
-                                                        ))}
-                                                      </Group>
-                                                    </Box>
-
-                                                    <Group
-                                                      gap="xs"
-                                                      justify="flex-end"
-                                                      align="center"
-                                                      style={{ flexShrink: 0 }}
+                                              {/* DETAILS + PICKED BUTTONS */}
+                                              <Box
+                                                style={{
+                                                  flex: 1,
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  gap: 6,
+                                                }}
+                                              >
+                                                <Group
+                                                  justify="space-between"
+                                                  align="flex-start"
+                                                  wrap="nowrap"
+                                                >
+                                                  <Box style={{ flex: 1 }}>
+                                                    <Text fw={500}>
+                                                      {it.name || "No name"}
+                                                    </Text>
+                                                    <Text
+                                                      size="xs"
+                                                      c="dimmed"
                                                     >
-                                                      <Button
-                                                        size="xs"
-                                                        variant={
-                                                          isPicked
-                                                            ? "filled"
-                                                            : "outline"
-                                                        }
-                                                        color={
-                                                          isPicked
-                                                            ? "green"
-                                                            : "gray"
-                                                        }
-                                                        onClick={() =>
-                                                          handleTogglePicked(
-                                                            o.id,
-                                                            idx
-                                                          )
-                                                        }
-                                                      >
-                                                        {isPicked
-                                                          ? "Picked"
-                                                          : "Mark picked"}
-                                                      </Button>
+                                                      {it.set_name ||
+                                                        "Unknown set"}
+                                                    </Text>
 
-                                                      <Button
-                                                        size="xs"
-                                                        variant="subtle"
-                                                        color="green"
-                                                        onClick={() =>
-                                                          handleMarkFulfilledUpTo(
-                                                            o.id,
-                                                            idx
-                                                          )
-                                                        }
-                                                      >
-                                                        Mark up to here
-                                                      </Button>
+                                                    <Text size="sm" mt={4}>
+                                                      Qty:{" "}
+                                                      {it.quantity ?? "?"}
+                                                    </Text>
+
+                                                    {/* BIN LOCATIONS */}
+                                                    <Group gap={6} mt={6}>
+                                                      {(
+                                                        it.binLocations || []
+                                                      ).map((b, i) => (
+                                                        <Badge
+                                                          key={i}
+                                                          color="yellow"
+                                                        >
+                                                          {b.bin ?? "?"} / Row{" "}
+                                                          {b.row ?? "?"} (x
+                                                          {b.quantity ?? "?"})
+                                                        </Badge>
+                                                      ))}
                                                     </Group>
+                                                  </Box>
+
+                                                  <Group
+                                                    gap="xs"
+                                                    justify="flex-end"
+                                                    align="center"
+                                                    style={{ flexShrink: 0 }}
+                                                  >
+                                                    <Button
+                                                      size="xs"
+                                                      variant={
+                                                        isPicked
+                                                          ? "filled"
+                                                          : "outline"
+                                                      }
+                                                      color={
+                                                        isPicked
+                                                          ? "green"
+                                                          : "gray"
+                                                      }
+                                                      onClick={() =>
+                                                        handleTogglePicked(
+                                                          o.id,
+                                                          idx
+                                                        )
+                                                      }
+                                                    >
+                                                      {isPicked
+                                                        ? "Picked"
+                                                        : "Mark picked"}
+                                                    </Button>
+
+                                                    <Button
+                                                      size="xs"
+                                                      variant="subtle"
+                                                      color="green"
+                                                      onClick={() =>
+                                                        handleMarkFulfilledUpTo(
+                                                          o.id,
+                                                          idx
+                                                        )
+                                                      }
+                                                    >
+                                                      Mark up to here
+                                                    </Button>
                                                   </Group>
-                                                </Box>
-                                              </Group>
-                                            );
-                                          }
-                                        )}
-                                      </Stack>
-                                    )}
-                                </Box>
-                              </Table.Td>
-                            </Table.Tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
+                                                </Group>
+                                              </Box>
+                                            </Group>
+                                          );
+                                        }
+                                      )}
+                                    </Stack>
+                                  )}
+                              </Box>
+                            </Table.Td>
+                          </Table.Tr>
+                        )}
+                      </Fragment>
+                    ))}
                   </Table.Tbody>
                 </Table>
               ) : (

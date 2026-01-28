@@ -14,29 +14,20 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
-type WeeklyCardRow = {
-  key: string;
-  name: string;
-  expansion: string;
-  condition?: string | null;
-  foil?: boolean;
-  totalQuantity: number;
-  totalCents: number;
-  currency: string;
-};
-
-type WeekBucket = {
-  key: string;
-  from: string; // YYYY-MM-DD
-  to: string;   // YYYY-MM-DD
-  label: string;
-  totalCards: number;
-  totalOrders: number;
-  rows: WeeklyCardRow[];
+type ApiOrder = {
+  id: number | string;
+  code?: string;
+  state?: string;
+  createdAt?: string | null;
+  size?: number | null;
+  sellerTotalCents?: number | null;
+  sellerTotalCurrency?: string | null;
+  formattedTotal?: string | null;
+  allocated?: boolean;
 };
 
 export function OrdersWeeklyView() {
-  const [buckets, setBuckets] = useState<WeekBucket[]>([]);
+  const [orders, setOrders] = useState<ApiOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [maxWeeks, setMaxWeeks] = useState("8");
@@ -47,21 +38,26 @@ export function OrdersWeeklyView() {
         setLoading(true);
         setError(null);
 
-        const res = await fetch("/api/orders/weekly-zero");
+        // ⬇️ Use the normalized orders endpoint
+        const res = await fetch("/api/orders");
         if (!res.ok) {
           const txt = await res.text();
           throw new Error(
-            `Failed to load weekly orders (${res.status}): ${
-              txt || "Unknown error"
-            }`
+            `Failed to load orders (${res.status}): ${txt || "Unknown error"}`
           );
         }
 
-        const data = (await res.json()) as WeekBucket[];
-        setBuckets(Array.isArray(data) ? data : []);
+        const data = (await res.json()) as ApiOrder[];
+
+        // ✅ Only keep orders with state === "paid"
+        const paid = (Array.isArray(data) ? data : []).filter((o) =>
+          String(o.state || "").toLowerCase() === "paid"
+        );
+
+        setOrders(paid);
       } catch (err: any) {
         console.error(err);
-        setError(err.message || "Failed to load weekly orders");
+        setError(err.message || "Failed to load orders");
       } finally {
         setLoading(false);
       }
@@ -71,19 +67,37 @@ export function OrdersWeeklyView() {
   }, []);
 
   const max = parseInt(maxWeeks || "8", 10);
-  const visibleBuckets = buckets.slice(0, max);
+
+  // 🕒 Filter by "last N weeks" using createdAt
+  const now = new Date();
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - max * 7);
+
+  const visibleOrders = orders
+    .filter((o) => {
+      if (!o.createdAt) return false;
+      const d = new Date(o.createdAt);
+      if (isNaN(d.getTime())) return false;
+      return d >= cutoff;
+    })
+    .sort((a, b) => {
+      const da = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const db = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return db - da; // newest first
+    });
 
   return (
     <Stack gap="md">
       <Group justify="space-between" align="flex-start">
         <Box>
-          <Title order={3}>CardTrader Zero – Weekly Cards</Title>
+          <Title order={3}>CardTrader – Paid Orders</Title>
           <Text size="sm" c="dimmed">
-            Every Wednesday → Tuesday, grouped by card (all CT0 orders combined).
+            Showing only orders with status <strong>PAID</strong> from the last
+            N weeks.
           </Text>
         </Box>
         <Select
-          label="Show"
+          label="Lookback"
           value={maxWeeks}
           onChange={(v) => v && setMaxWeeks(v)}
           data={[
@@ -112,57 +126,77 @@ export function OrdersWeeklyView() {
         </Alert>
       )}
 
-      {!loading && !error && visibleBuckets.length === 0 && (
+      {!loading && !error && visibleOrders.length === 0 && (
         <Text size="sm" c="dimmed">
-          No CardTrader Zero orders found in this time window.
+          No PAID orders found in this time window.
         </Text>
       )}
 
-      {visibleBuckets.map((bucket) => (
-        <Paper key={bucket.key} withBorder radius="md" p="md">
+      {!loading && !error && visibleOrders.length > 0 && (
+        <Paper withBorder radius="md" p="md">
           <Group justify="space-between" mb="xs">
             <Group gap="xs">
-              <Title order={4}>{bucket.label}</Title>
+              <Title order={4}>Paid Orders</Title>
               <Badge variant="light" size="sm">
-                {bucket.totalCards} cards
-              </Badge>
-              <Badge variant="outline" size="sm">
-                {bucket.totalOrders} orders
+                {visibleOrders.length} orders
               </Badge>
             </Group>
-            <Text size="xs" c="dimmed">
-              {bucket.from} → {bucket.to}
-            </Text>
           </Group>
 
           <Table striped highlightOnHover withColumnBorders>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>Card</Table.Th>
-                <Table.Th>Expansion</Table.Th>
-                <Table.Th>Condition</Table.Th>
-                <Table.Th>Foil</Table.Th>
-                <Table.Th ta="right">Qty</Table.Th>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>Code</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th ta="right">Cards</Table.Th>
                 <Table.Th ta="right">Total</Table.Th>
+                <Table.Th ta="center">Allocated?</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {bucket.rows.map((row) => (
-                <Table.Tr key={row.key}>
-                  <Table.Td>{row.name}</Table.Td>
-                  <Table.Td>{row.expansion}</Table.Td>
-                  <Table.Td>{row.condition || "—"}</Table.Td>
-                  <Table.Td>{row.foil ? "Foil" : "Non-foil"}</Table.Td>
-                  <Table.Td ta="right">{row.totalQuantity}</Table.Td>
-                  <Table.Td ta="right">
-                    {(row.totalCents / 100).toFixed(2)} {row.currency}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
+              {visibleOrders.map((o) => {
+                const dateText = o.createdAt
+                  ? new Date(o.createdAt).toLocaleString()
+                  : "—";
+
+                // Prefer formattedTotal if present, else sellerTotalCents
+                let totalText = "—";
+                if (o.formattedTotal) {
+                  totalText = o.formattedTotal;
+                } else if (o.sellerTotalCents != null) {
+                  const amt = (o.sellerTotalCents / 100).toFixed(2);
+                  totalText = o.sellerTotalCurrency
+                    ? `${amt} ${o.sellerTotalCurrency}`
+                    : amt;
+                }
+
+                return (
+                  <Table.Tr key={o.id}>
+                    <Table.Td>{dateText}</Table.Td>
+                    <Table.Td>{o.code || o.id}</Table.Td>
+                    <Table.Td>{o.state || "—"}</Table.Td>
+                    <Table.Td ta="right">{o.size ?? "—"}</Table.Td>
+                    <Table.Td ta="right">{totalText}</Table.Td>
+                    <Table.Td ta="center">
+                      {o.allocated ? (
+                        <Badge color="green" variant="light" size="sm">
+                          Yes
+                        </Badge>
+                      ) : (
+                        <Badge color="gray" variant="light" size="sm">
+                          No
+                        </Badge>
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
             </Table.Tbody>
           </Table>
         </Paper>
-      ))}
+      )}
     </Stack>
   );
 }
+

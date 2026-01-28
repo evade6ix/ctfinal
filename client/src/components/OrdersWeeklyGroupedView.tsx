@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import {
   Badge,
   Box,
@@ -31,7 +31,7 @@ type WeeklySummary = {
 type OrderItem = {
   id?: number;
   cardTraderId?: number; // may map to blueprint id
-  blueprintId?: number;  // if backend sends this later, we prefer it
+  blueprintId?: number; // if backend sends this later, we prefer it
   name?: string;
   quantity?: number;
   image_url?: string;
@@ -43,10 +43,10 @@ export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 🔹 state for per-order card drilldown
-  const [expandedOrderId, setExpandedOrderId] = useState<string | number | null>(
-    null
-  );
+  // per-order card drilldown
+  const [expandedOrderId, setExpandedOrderId] = useState<
+    string | number | null
+  >(null);
   const [itemsByOrder, setItemsByOrder] = useState<
     Record<string | number, OrderItem[]>
   >({});
@@ -151,9 +151,7 @@ export function OrdersWeeklyGroupedView() {
   };
 
   const loadItems = async (orderId: string | number) => {
-    if (itemsByOrder[orderId]) {
-      return; // already cached
-    }
+    if (itemsByOrder[orderId]) return; // already cached
 
     try {
       setLoadingItems(true);
@@ -171,9 +169,12 @@ export function OrdersWeeklyGroupedView() {
 
       const data = (await res.json()) as OrderItem[];
 
+      // ✅ pre-sort once when we store them
+      const sorted = sortOrderItems(data);
+
       setItemsByOrder((prev) => ({
         ...prev,
-        [orderId]: data,
+        [orderId]: sorted,
       }));
     } catch (err) {
       console.error("Error loading order items", err);
@@ -274,10 +275,9 @@ export function OrdersWeeklyGroupedView() {
                   </Table.Thead>
                   <Table.Tbody>
                     {paidOrders.map((o) => (
-                      <>
+                      <Fragment key={o.id}>
                         {/* MAIN ORDER ROW */}
                         <Table.Tr
-                          key={o.id}
                           style={{ cursor: "pointer" }}
                           onClick={() => handleToggleOrder(o.id)}
                         >
@@ -314,7 +314,7 @@ export function OrdersWeeklyGroupedView() {
 
                         {/* EXPANDED CARDS ROW */}
                         {expandedOrderId === o.id && (
-                          <Table.Tr key={`${o.id}-expanded`}>
+                          <Table.Tr>
                             <Table.Td
                               colSpan={5}
                               style={{
@@ -324,7 +324,7 @@ export function OrdersWeeklyGroupedView() {
                               }}
                             >
                               <Box p="md">
-                                {loadingItems && !itemsByOrder[o.id] && (
+                                {!itemsByOrder[o.id] && loadingItems && (
                                   <Group justify="center" p="lg">
                                     <Loader size="sm" />
                                   </Group>
@@ -341,71 +341,69 @@ export function OrdersWeeklyGroupedView() {
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length > 0 && (
                                     <Stack gap="md">
-                                      {sortOrderItems(itemsByOrder[o.id]).map(
-                                        (it, idx) => (
-                                          <Group
-                                            key={idx}
-                                            align="flex-start"
-                                            wrap="nowrap"
+                                      {itemsByOrder[o.id].map((it, idx) => (
+                                        <Group
+                                          key={idx}
+                                          align="flex-start"
+                                          wrap="nowrap"
+                                          style={{
+                                            padding: "8px 0",
+                                            borderBottom: "1px solid #333",
+                                          }}
+                                        >
+                                          {/* IMAGE */}
+                                          <img
+                                            src={getCardImageSrc(it)}
+                                            width={50}
+                                            height={70}
                                             style={{
-                                              padding: "8px 0",
-                                              borderBottom: "1px solid #333",
+                                              objectFit: "cover",
+                                              borderRadius: 4,
                                             }}
-                                          >
-                                            {/* IMAGE */}
-                                            <img
-                                              src={getCardImageSrc(it)}
-                                              width={50}
-                                              height={70}
-                                              style={{
-                                                objectFit: "cover",
-                                                borderRadius: 4,
-                                              }}
-                                              onError={(e) => {
-                                                (e.target as HTMLImageElement).src =
-                                                  "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
-                                              }}
-                                            />
+                                            onError={(e) => {
+                                              (e.target as HTMLImageElement).src =
+                                                "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
+                                            }}
+                                          />
 
-                                            {/* DETAILS */}
-                                            <Box style={{ flex: 1 }}>
-                                              <Text fw={500}>
-                                                {it.name || "No name"}
-                                              </Text>
-                                              <Text size="xs" c="dimmed">
-                                                {it.set_name || "Unknown set"}
-                                              </Text>
+                                          {/* DETAILS */}
+                                          <Box style={{ flex: 1 }}>
+                                            <Text fw={500}>
+                                              {it.name || "No name"}
+                                            </Text>
+                                            <Text size="xs" c="dimmed">
+                                              {it.set_name || "Unknown set"}
+                                            </Text>
 
-                                              <Text size="sm" mt={4}>
-                                                Qty: {it.quantity ?? "?"}
-                                              </Text>
+                                            <Text size="sm" mt={4}>
+                                              Qty: {it.quantity ?? "?"}
+                                            </Text>
 
-                                              {/* BIN LOCATIONS */}
-                                              <Group gap={6} mt={6}>
-                                                {(it.binLocations || []).map(
-                                                  (b, i) => (
-                                                    <Badge
-                                                      key={i}
-                                                      color="yellow"
-                                                    >
-                                                      {b.bin ?? "?"} / Row{" "}
-                                                      {b.row ?? "?"} (x
-                                                      {b.quantity ?? "?"})
-                                                    </Badge>
-                                                  )
-                                                )}
-                                              </Group>
-                                            </Box>
-                                          </Group>
-                                        )
-                                      )}
+                                            {/* BIN LOCATIONS */}
+                                            <Group gap={6} mt={6}>
+                                              {(it.binLocations || []).map(
+                                                (b, i) => (
+                                                  <Badge
+                                                    key={i}
+                                                    color="yellow"
+                                                  >
+                                                    {b.bin ?? "?"} / Row{" "}
+                                                    {b.row ?? "?"} (x
+                                                    {b.quantity ?? "?"})
+                                                  </Badge>
+                                                )
+                                              )}
+                                            </Group>
+                                          </Box>
+                                        </Group>
+                                      ))}
                                     </Stack>
                                   )}
                               </Box>
                             </Table.Td>
                           </Table.Tr>
                         )}
-                      </>
+                      </Fragment>
                     ))}
                   </Table.Tbody>
                 </Table>

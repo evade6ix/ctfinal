@@ -86,7 +86,7 @@ export function OrdersView() {
     fetchOrders();
   }, []);
 
-  // 🔥 FIXED: use /api/order-articles/:id and always set itemsByOrder
+  // 🔥 use /api/order-articles/:id and always set itemsByOrder
   const loadItems = async (orderId: string | number) => {
     if (itemsByOrder[orderId]) return; // cached
 
@@ -118,7 +118,7 @@ export function OrdersView() {
     if (willExpand) loadItems(id);
   };
 
-    const getBuyerDisplay = (buyer?: Buyer | null) => {
+  const getBuyerDisplay = (buyer?: Buyer | null) => {
     if (!buyer) return "Unknown";
     if (buyer.username && buyer.country)
       return `${buyer.username} (${buyer.country})`;
@@ -144,6 +144,48 @@ export function OrdersView() {
     return "-";
   };
 
+  // 🔹 sort items: bins first (by bin → row), then no-bin by set_name → name
+  const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
+    return [...items].sort((a, b) => {
+      const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
+      const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
+
+      // 1) Items WITH bins first
+      if (aHasBin && !bHasBin) return -1;
+      if (!aHasBin && bHasBin) return 1;
+
+      // 2) If both HAVE bins → sort by bin name then row
+      if (aHasBin && bHasBin) {
+        const aLoc = a.binLocations![0];
+        const bLoc = b.binLocations![0];
+
+        const aBin = (aLoc.bin || "").toString();
+        const bBin = (bLoc.bin || "").toString();
+
+        if (aBin !== bBin) {
+          return aBin.localeCompare(bBin, undefined, { numeric: true });
+        }
+
+        const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
+        const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
+
+        return aRow - bRow;
+      }
+
+      // 3) Neither has bins → group/sort by set_name, then name
+      const aSet = (a.set_name || "").toString();
+      const bSet = (b.set_name || "").toString();
+
+      if (aSet !== bSet) {
+        return aSet.localeCompare(bSet, undefined, { numeric: true });
+      }
+
+      const aName = (a.name || "").toString();
+      const bName = (b.name || "").toString();
+
+      return aName.localeCompare(bName, undefined, { numeric: true });
+    });
+  };
 
   // 🔹 sync allocated orders -> hits POST /api/orders/sync
   const handleSyncOrders = async () => {
@@ -285,7 +327,7 @@ export function OrdersView() {
 
                     <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
                     <Table.Td>{o.size ?? "-"}</Table.Td>
-<Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
+                    <Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
                     <Table.Td>{formatTotal(o)}</Table.Td>
 
                     <Table.Td>
@@ -333,68 +375,73 @@ export function OrdersView() {
                           {itemsByOrder[o.id] &&
                             itemsByOrder[o.id].length > 0 && (
                               <Stack gap="md">
-                                {itemsByOrder[o.id].map((it, idx) => (
-                                  <Group
-                                    key={idx}
-                                    align="flex-start"
-                                    wrap="nowrap"
-                                    style={{
-                                      padding: "8px 0",
-                                      borderBottom: "1px solid #333",
-                                    }}
-                                  >
-                                    {/* IMAGE */}
-                                    <img
-                                      src={
-                                        it.image_url ||
-                                        "https://cards.scryfall.io/large/front/0/1/placeholder.jpg"
-                                      }
-                                      width={50}
-                                      height={70}
+                                {sortOrderItems(itemsByOrder[o.id]).map(
+                                  (it, idx) => (
+                                    <Group
+                                      key={idx}
+                                      align="flex-start"
+                                      wrap="nowrap"
                                       style={{
-                                        objectFit: "cover",
-                                        borderRadius: 4,
+                                        padding: "8px 0",
+                                        borderBottom: "1px solid #333",
                                       }}
-                                      onError={(e) =>
-                                        ((e.target as HTMLImageElement).src =
-                                          "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
-                                      }
-                                    />
-
-                                    {/* DETAILS */}
-                                    <Box style={{ flex: 1 }}>
-                                      <Text fw={500}>
-                                        {it.name || "No name"}
-                                      </Text>
-                                      <Text size="xs" c="dimmed">
-                                        {it.set_name || "Unknown set"}
-                                      </Text>
-
-                                      <Text size="sm" mt={4}>
-                                        Qty: {it.quantity ?? "?"}
-                                      </Text>
-
-                                      {/* BIN LOCATIONS */}
-                                      <Group gap={6} mt={6}>
-                                        {(it.binLocations || []).map((b, i) => (
-                                          <Badge key={i} color="yellow">
-                                            {b.bin ?? "?"} / Row {b.row ?? "?"}{" "}
-                                            (x{b.quantity ?? "?"})
-                                          </Badge>
-                                        ))}
-                                      </Group>
-                                    </Box>
-
-                                    <Button
-                                      color="yellow"
-                                      size="xs"
-                                      variant="filled"
-                                      disabled
                                     >
-                                      Deduct
-                                    </Button>
-                                  </Group>
-                                ))}
+                                      {/* IMAGE */}
+                                      <img
+                                        src={
+                                          it.image_url ||
+                                          "https://cards.scryfall.io/large/front/0/1/placeholder.jpg"
+                                        }
+                                        width={50}
+                                        height={70}
+                                        style={{
+                                          objectFit: "cover",
+                                          borderRadius: 4,
+                                        }}
+                                        onError={(e) =>
+                                          ((e.target as HTMLImageElement).src =
+                                            "https://cards.scryfall.io/large/front/0/1/placeholder.jpg")
+                                        }
+                                      />
+
+                                      {/* DETAILS */}
+                                      <Box style={{ flex: 1 }}>
+                                        <Text fw={500}>
+                                          {it.name || "No name"}
+                                        </Text>
+                                        <Text size="xs" c="dimmed">
+                                          {it.set_name || "Unknown set"}
+                                        </Text>
+
+                                        <Text size="sm" mt={4}>
+                                          Qty: {it.quantity ?? "?"}
+                                        </Text>
+
+                                        {/* BIN LOCATIONS */}
+                                        <Group gap={6} mt={6}>
+                                          {(it.binLocations || []).map(
+                                            (b, i) => (
+                                              <Badge key={i} color="yellow">
+                                                {b.bin ?? "?"} / Row{" "}
+                                                {b.row ?? "?"} (x
+                                                {b.quantity ?? "?"})
+                                              </Badge>
+                                            )
+                                          )}
+                                        </Group>
+                                      </Box>
+
+                                      <Button
+                                        color="yellow"
+                                        size="xs"
+                                        variant="filled"
+                                        disabled
+                                      >
+                                        Deduct
+                                      </Button>
+                                    </Group>
+                                  )
+                                )}
                               </Stack>
                             )}
                         </Box>

@@ -514,7 +514,7 @@ export function OrdersWeeklyGroupedView() {
                                                 </Button>
                                               </Box>
 
-                                              {/* DETAILS + PICKED BUTTONS */}
+                                              {/* DETAILS + PICKED BUTTON */}
                                               <Box
                                                 style={{
                                                   flex: 1,
@@ -591,21 +591,27 @@ export function OrdersWeeklyGroupedView() {
                                                         ? "Picked"
                                                         : "Mark picked"}
                                                     </Button>
-
-                                                    <Button
-                                                      size="xs"
-                                                      variant="subtle"
-                                                      color="green"
-                                                      onClick={() =>
-                                                        handleMarkFulfilledUpTo(
-                                                          o.id,
-                                                          idx
-                                                        )
-                                                      }
-                                                    >
-                                                      Mark up to here
-                                                    </Button>
                                                   </Group>
+                                                </Group>
+
+                                                {/* 🔽 Moved "Mark up to here" BELOW the row so it doesn't squeeze bins on mobile */}
+                                                <Group
+                                                  justify="flex-end"
+                                                  mt={4}
+                                                >
+                                                  <Button
+                                                    size="xs"
+                                                    variant="subtle"
+                                                    color="green"
+                                                    onClick={() =>
+                                                      handleMarkFulfilledUpTo(
+                                                        o.id,
+                                                        idx
+                                                      )
+                                                    }
+                                                  >
+                                                    Mark up to here
+                                                  </Button>
                                                 </Group>
                                               </Box>
                                             </Group>
@@ -633,4 +639,3 @@ export function OrdersWeeklyGroupedView() {
     </Stack>
   );
 }
-

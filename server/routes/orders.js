@@ -134,13 +134,23 @@ router.post("/sync", async (req, res) => {
     console.log("DEBUG /api/orders/sync states:", stateCounts);
     console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
 
-    // Only CardTrader Zero orders that are real (hub_pending/paid/sent)
+       // Only decrement according to CardTrader docs:
+    // - via_cardtrader_zero = true  && state = hub_pending  → YES
+    // - via_cardtrader_zero = false && state = paid        → YES
+    // - anything else                                      → NO
     const eligible = allOrders.filter((o) => {
-      const s = String(o.state || "").toLowerCase();
+      const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
-      if (!isZero) return false;
-      return s === "hub_pending" || s === "sent" || s === "paid";
+
+      if (isZero) {
+        // CardTrader Zero orders → only hub_pending should decrement stock
+        return state === "hub_pending";
+      } else {
+        // Normal (non-Zero) orders → only paid should decrement stock
+        return state === "paid";
+      }
     });
+
 
     let triggered = 0;
     let skippedAlreadyAllocated = 0;

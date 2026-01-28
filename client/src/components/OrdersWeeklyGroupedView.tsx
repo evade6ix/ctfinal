@@ -23,6 +23,9 @@ type WeeklyResponse = {
       name: string;
       expansion: string;
       totalQuantity: number;
+      // 👇 optional bin / row if backend sends them
+      bin?: number | string | null;
+      row?: number | string | null;
       items: {
         orderId: number | string;
         code: string;
@@ -32,17 +35,42 @@ type WeeklyResponse = {
   };
 };
 
+// 👇 summary type for /api/orders
+type OrderSummary = {
+  id: number | string;
+  code: string;
+  state?: string | null;
+  createdAt?: string | null;
+  formattedTotal?: string | null;
+};
+
 export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklyResponse[]>([]);
+  const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const res = await fetch("/api/orders-weekly");
-      const json = await res.json();
-      setData(Array.isArray(json) ? json : []);
-      setLoading(false);
+      try {
+        // 🔄 pull weekly cardmap + raw orders
+        const [weeklyRes, ordersRes] = await Promise.all([
+          fetch("/api/orders-weekly"),
+          fetch("/api/orders"),
+        ]);
+
+        const weeklyJson = await weeklyRes.json();
+        const ordersJson = await ordersRes.json();
+
+        setData(Array.isArray(weeklyJson) ? weeklyJson : []);
+        setOrders(Array.isArray(ordersJson) ? ordersJson : []);
+      } catch (err) {
+        console.error("Failed to load weekly / orders:", err);
+        setData([]);
+        setOrders([]);
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
@@ -61,9 +89,42 @@ export function OrdersWeeklyGroupedView() {
 
       {!loading &&
         data.map((week) => {
-          const rows = Object.values(week.cardmap).sort(
-            (a, b) => b.totalQuantity - a.totalQuantity
-          );
+          // 🔢 sort cards by bin first, then row, then totalQuantity desc
+          const rows = Object.values(week.cardmap).sort((a, b) => {
+            const parseNum = (v: unknown) => {
+              if (typeof v === "number") return v;
+              if (typeof v === "string") {
+                const n = parseInt(v, 10);
+                return isNaN(n) ? 0 : n;
+              }
+              return 0;
+            };
+
+            const binA = parseNum(a.bin);
+            const binB = parseNum(b.bin);
+            if (binA !== binB) return binA - binB;
+
+            const rowA = parseNum(a.row);
+            const rowB = parseNum(b.row);
+            if (rowA !== rowB) return rowA - rowB;
+
+            // fallback: highest totalQuantity first
+            return b.totalQuantity - a.totalQuantity;
+          });
+
+          // 🔎 PAID orders that fall inside this week's [from, to] window
+          const paidOrders = orders.filter((o) => {
+            if (!o.createdAt) return false;
+            if (String(o.state || "").toLowerCase() !== "paid") return false;
+
+            const t = new Date(o.createdAt).getTime();
+            const fromTs = week.from ? new Date(week.from).getTime() : NaN;
+            const toTs = week.to ? new Date(week.to).getTime() : NaN;
+
+            if (isNaN(t) || isNaN(fromTs) || isNaN(toTs)) return false;
+
+            return t >= fromTs && t <= toTs;
+          });
 
           return (
             <Paper
@@ -82,6 +143,54 @@ export function OrdersWeeklyGroupedView() {
                   {rows.length} cards
                 </Badge>
               </Group>
+
+              {/* PAID ORDERS IN THIS WEEK (e.g. Ct connect shipment) */}
+              {paidOrders.length > 0 && (
+                <Stack gap={4} mb="sm">
+                  <Text size="sm" fw={500}>
+                    Paid orders in this window
+                  </Text>
+                  <Table
+                    withTableBorder
+                    withColumnBorders
+                    styles={{
+                      table: {
+                        background: "var(--mantine-color-dark-7)",
+                      },
+                      th: {
+                        background: "var(--mantine-color-dark-6)",
+                      },
+                    }}
+                  >
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Order Code</Table.Th>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Th>Created</Table.Th>
+                        <Table.Th>Total</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {paidOrders.map((o) => (
+                        <Table.Tr key={o.id}>
+                          <Table.Td>{o.code}</Table.Td>
+                          <Table.Td>
+                            <Badge color="green" variant="filled" size="xs">
+                              {String(o.state || "").toUpperCase()}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            {o.createdAt
+                              ? new Date(o.createdAt).toLocaleString()
+                              : "-"}
+                          </Table.Td>
+                          <Table.Td>{o.formattedTotal ?? "-"}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Stack>
+              )}
 
               {/* ACCORDION */}
               <Accordion
@@ -103,7 +212,10 @@ export function OrdersWeeklyGroupedView() {
                 }}
               >
                 {rows.map((c) => (
-                  <Accordion.Item key={c.blueprintId} value={String(c.blueprintId)}>
+                  <Accordion.Item
+                    key={c.blueprintId}
+                    value={String(c.blueprintId)}
+                  >
                     <Accordion.Control>
                       <Group gap="md">
                         <Image
@@ -118,6 +230,12 @@ export function OrdersWeeklyGroupedView() {
                           <Text size="xs" c="dimmed">
                             {c.expansion}
                           </Text>
+                          {/* Optional bin/row display if provided */}
+                          {(c.bin != null || c.row != null) && (
+                            <Text size="xs" c="dimmed">
+                              Bin {c.bin ?? "?"} · Row {c.row ?? "?"}
+                            </Text>
+                          )}
                         </Stack>
                       </Group>
                     </Accordion.Control>

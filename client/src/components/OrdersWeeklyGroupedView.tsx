@@ -272,6 +272,28 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
+  // Mark all items up to (and including) this index as picked
+  const handleMarkFulfilledUpTo = (
+    orderId: string | number,
+    index: number
+  ) => {
+    setPickedByOrder((prev) => {
+      const existingForOrder = prev[orderId] || {};
+      const updatedForOrder: Record<number, boolean> = {
+        ...existingForOrder,
+      };
+
+      for (let i = 0; i <= index; i++) {
+        updatedForOrder[i] = true;
+      }
+
+      return {
+        ...prev,
+        [orderId]: updatedForOrder,
+      };
+    });
+  };
+
   return (
     <Stack gap="md">
       <Title order={3}>CardTrader Zero – Weekly Shipments</Title>
@@ -492,7 +514,7 @@ export function OrdersWeeklyGroupedView() {
                                                 </Button>
                                               </Box>
 
-                                              {/* DETAILS + PICKED BUTTON */}
+                                              {/* DETAILS + PICKED BUTTONS */}
                                               <Box
                                                 style={{
                                                   flex: 1,
@@ -504,6 +526,7 @@ export function OrdersWeeklyGroupedView() {
                                                 <Group
                                                   justify="space-between"
                                                   align="flex-start"
+                                                  wrap="nowrap"
                                                 >
                                                   <Box style={{ flex: 1 }}>
                                                     <Text fw={500}>
@@ -539,29 +562,50 @@ export function OrdersWeeklyGroupedView() {
                                                     </Group>
                                                   </Box>
 
-                                                  <Button
-                                                    size="xs"
-                                                    variant={
-                                                      isPicked
-                                                        ? "filled"
-                                                        : "outline"
-                                                    }
-                                                    color={
-                                                      isPicked
-                                                        ? "green"
-                                                        : "gray"
-                                                    }
-                                                    onClick={() =>
-                                                      handleTogglePicked(
-                                                        o.id,
-                                                        idx
-                                                      )
-                                                    }
+                                                  <Group
+                                                    gap="xs"
+                                                    justify="flex-end"
+                                                    align="center"
+                                                    style={{ flexShrink: 0 }}
                                                   >
-                                                    {isPicked
-                                                      ? "Picked"
-                                                      : "Mark picked"}
-                                                  </Button>
+                                                    <Button
+                                                      size="xs"
+                                                      variant={
+                                                        isPicked
+                                                          ? "filled"
+                                                          : "outline"
+                                                      }
+                                                      color={
+                                                        isPicked
+                                                          ? "green"
+                                                          : "gray"
+                                                      }
+                                                      onClick={() =>
+                                                        handleTogglePicked(
+                                                          o.id,
+                                                          idx
+                                                        )
+                                                      }
+                                                    >
+                                                      {isPicked
+                                                        ? "Picked"
+                                                        : "Mark picked"}
+                                                    </Button>
+
+                                                    <Button
+                                                      size="xs"
+                                                      variant="subtle"
+                                                      color="green"
+                                                      onClick={() =>
+                                                        handleMarkFulfilledUpTo(
+                                                          o.id,
+                                                          idx
+                                                        )
+                                                      }
+                                                    >
+                                                      Mark up to here
+                                                    </Button>
+                                                  </Group>
                                                 </Group>
                                               </Box>
                                             </Group>

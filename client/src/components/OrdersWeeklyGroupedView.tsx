@@ -34,7 +34,8 @@ type OrderItem = {
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  image_url?: string;
+  image_url?: string;   // from /api/order-articles
+  imageUrl?: string;    // from /api/orders (new camelCase)
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
@@ -137,28 +138,24 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
-// Image selection: DB image → CardTrader blueprint → local placeholder
-const getCardImageSrc = (it: OrderItem) => {
-  // Accept BOTH backend formats: image_url and imageUrl
-  const dbImage =
-    it.image_url ||        // snake_case from Express
-    (it as any).imageUrl;  // camelCase from Mongo
+  // Image selection: DB image → CardTrader blueprint → local placeholder
+  const getCardImageSrc = (it: OrderItem) => {
+    // 1) Prefer camelCase (from /api/orders) then snake_case (from /api/order-articles)
+    const dbImage = it.imageUrl || it.image_url;
 
-  // 1) Use DB image first
-  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
-    return dbImage;
-  }
+    if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+      return dbImage;
+    }
 
-  // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
-  const blueprintId = it.blueprintId ?? it.cardTraderId;
-  if (blueprintId) {
-    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-  }
+    // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
+    const blueprintId = it.blueprintId ?? it.cardTraderId;
+    if (blueprintId) {
+      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+    }
 
-  // 3) FINAL fallback – your local placeholder
-  return "/card-placeholder.png";
-};
-
+    // 3) FINAL fallback – your local placeholder
+    return "/card-placeholder.png";
+  };
 
   // Load items for a single order from /api/order-articles/:id
   const loadItems = async (orderId: string | number) => {
@@ -365,19 +362,19 @@ const getCardImageSrc = (it: OrderItem) => {
                                         >
                                           {/* IMAGE */}
                                           <img
-  src={getCardImageSrc(it)}
-  width={50}
-  height={70}
-  style={{
-    objectFit: "cover",
-    borderRadius: 4,
-  }}
-  onError={(e) => {
-    // if CardTrader URL 404s, fall back to local placeholder, not Scryfall
-    (e.target as HTMLImageElement).src = "/card-placeholder.png";
-  }}
-  alt={it.name || "Card image"}
-/>
+                                            src={getCardImageSrc(it)}
+                                            width={50}
+                                            height={70}
+                                            style={{
+                                              objectFit: "cover",
+                                              borderRadius: 4,
+                                            }}
+                                            onError={(e) => {
+                                              (e.target as HTMLImageElement).src =
+                                                "/card-placeholder.png";
+                                            }}
+                                            alt={it.name || "Card image"}
+                                          />
 
                                           {/* DETAILS */}
                                           <Box style={{ flex: 1 }}>

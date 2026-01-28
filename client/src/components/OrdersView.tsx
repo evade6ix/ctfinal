@@ -45,7 +45,8 @@ type OrderItem = {
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  image_url?: string;
+  image_url?: string;   // from /api/order-articles
+  imageUrl?: string;    // future /api/orders usage if we wire it
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
@@ -111,28 +112,24 @@ export function OrdersView() {
     }
   };
 
-// ⭐ FIXED IMAGE SELECTOR – supports BOTH image_url + imageUrl ⭐
-const getCardImageSrc = (it: OrderItem) => {
-  // Accept BOTH backend formats
-  const dbImage =
-    it.image_url ||        // snake_case from /api/order-articles
-    (it as any).imageUrl;  // camelCase from MongoDB
+  // ⭐ FIXED IMAGE SELECTOR – supports BOTH imageUrl + image_url ⭐
+  const getCardImageSrc = (it: OrderItem) => {
+    // 1) Prefer camelCase (future /api/orders items) then snake_case (/api/order-articles)
+    const dbImage = it.imageUrl || it.image_url;
 
-  // 1) Use DB image first
-  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
-    return dbImage;
-  }
+    if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+      return dbImage;
+    }
 
-  // 2) Fallback → CardTrader Blueprint CDN
-  const blueprintId = it.blueprintId ?? it.cardTraderId;
-  if (blueprintId) {
-    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-  }
+    // 2) Fallback → CardTrader Blueprint CDN
+    const blueprintId = it.blueprintId ?? it.cardTraderId;
+    if (blueprintId) {
+      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+    }
 
-  // 3) Final fallback → local placeholder
-  return "/card-placeholder.png";
-};
-
+    // 3) Final fallback → local placeholder
+    return "/card-placeholder.png";
+  };
 
   const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
@@ -180,7 +177,8 @@ const getCardImageSrc = (it: OrderItem) => {
         const aBin = (aLoc.bin || "").toString();
         const bBin = (bLoc.bin || "").toString();
 
-        if (aBin !== bBin) return aBin.localeCompare(bBin, undefined, { numeric: true });
+        if (aBin !== bBin)
+          return aBin.localeCompare(bBin, undefined, { numeric: true });
 
         const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
         const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
@@ -189,7 +187,8 @@ const getCardImageSrc = (it: OrderItem) => {
 
       const aSet = (a.set_name || "").toString();
       const bSet = (b.set_name || "").toString();
-      if (aSet !== bSet) return aSet.localeCompare(bSet, undefined, { numeric: true });
+      if (aSet !== bSet)
+        return aSet.localeCompare(bSet, undefined, { numeric: true });
 
       const aName = (a.name || "").toString();
       const bName = (b.name || "").toString();

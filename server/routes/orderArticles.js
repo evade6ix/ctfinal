@@ -9,8 +9,17 @@ import { allocateFromBins } from "../utils/allocateFromBins.js";
 const router = express.Router();
 
 /**
+ * 🔒 Simple in-memory cache for Scryfall image URLs
+ * key: cardName.toLowerCase()
+ */
+const scryfallCache = new Map();
+
+// Max Scryfall calls allowed PER /api/order-articles/:id request
+const MAX_SCRYFALL_LOOKUPS_PER_REQUEST = 50;
+
+/**
  * Helper: Scryfall lookup by exact card name
- * (Only used when we truly have NO CardTrader IDs at all)
+ * (Low-level: does a real HTTP call)
  */
 async function getScryfallImage(cardName) {
   if (!cardName) return null;
@@ -50,7 +59,78 @@ async function getScryfallImage(cardName) {
 }
 
 /**
+ * Wrapper: Scryfall lookup with per-request limit + cache
+ * ctx.lookups is per /api/order-articles/:id request
+ */
+async function getScryfallImageLimited(cardName, ctx) {
+  if (!cardName) return null;
+
+  const key = String(cardName).toLowerCase();
+
+  // 1) Cache hit
+  if (scryfallCache.has(key)) {
+    return scryfallCache.get(key);
+  }
+
+  // 2) Hit per-request cap → no more Scryfall calls
+  if (ctx.lookups >= MAX_SCRYFALL_LOOKUPS_PER_REQUEST) {
+    return null;
+  }
+
+  ctx.lookups++;
+
+  // 3) Actual Scryfall fetch
+  const url = await getScryfallImage(cardName);
+  if (url) {
+    scryfallCache.set(key, url);
+  }
+
+  return url;
+}
+
+/**
+ * GET /api/order-articles/image?name=Card+Name
+ * Returns a single Scryfall image URL for an exact card name.
+ * Used by "Show image" buttons so we don't hit Scryfall for every line item.
+ */
+router.get("/image", async (req, res) => {
+  try {
+    const name = req.query.name;
+
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "Missing ?name query parameter" });
+    }
+
+    const key = name.toLowerCase();
+
+    // 1) Check cache first
+    if (scryfallCache.has(key)) {
+      return res.json({ image_url: scryfallCache.get(key) });
+    }
+
+    // 2) Direct Scryfall lookup
+    const url = await getScryfallImage(name);
+
+    if (url) {
+      scryfallCache.set(key, url);
+    }
+
+    return res.json({ image_url: url });
+  } catch (err) {
+    console.error("❌ /api/order-articles/image error:", err.message || err);
+    return res.status(500).json({
+      error: "Failed to fetch card image",
+    });
+  }
+});
+
+/**
  * GET /api/order-articles/:id
+ * Returns normalized line items for an order, including:
+ * - cardTraderId / blueprintId
+ * - quantity
+ * - Scryfall image_url
+ * - binLocations (from allocations / live allocation)
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -62,11 +142,11 @@ router.get("/:id", async (req, res) => {
   try {
     const client = ct();
 
-    // 1️⃣ Fetch the order
+    // 1️⃣ Fetch the order from CardTrader
     const orderRes = await client.get(`/orders/${id}`);
     const order = orderRes.data || {};
 
-    // 2️⃣ Extract line items (be generous about shape)
+    // 2️⃣ Extract line items (be generous about the shape)
     let rawItems = [];
     if (Array.isArray(order.order_items)) {
       rawItems = order.order_items;
@@ -85,34 +165,39 @@ router.get("/:id", async (req, res) => {
     // 3️⃣ Normalize base items
     const baseItems = rawItems.map((a) => ({
       id: a.id,
-      cardTraderId: a.product_id ?? null,  // CT listing / product id
+      cardTraderId: a.product_id ?? null, // CT listing / product id
       blueprintId: a.blueprint_id ?? null, // CT blueprint id (like Catalog uses)
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
       set_name: a.expansion || null,
-      image_url: null,
+      image_url: null, // will be filled with Scryfall
       binLocations: [],
     }));
 
     if (!baseItems.length) return res.json([]);
 
-    // 4️⃣ Gather CT IDs
+    // 4️⃣ Gather CT IDs (for bins / allocations)
     const ctIds = baseItems
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // If no valid CT IDs, only Scryfall is possible (edge case)
+    // Edge case: if we truly have NO CT IDs, we can *only* do Scryfall images,
+    // and we can't allocate bins anyway.
     if (!ctIds.length) {
+      // per-request context for Scryfall limits
+      const ctx = { lookups: 0 };
+
       const finalNoCT = await Promise.all(
         baseItems.map(async (it) => ({
           ...it,
-          image_url: skipImages ? null : await getScryfallImage(it.name),
+          image_url: skipImages ? null : await getScryfallImageLimited(it.name, ctx),
+          binLocations: [],
         }))
       );
       return res.json(finalNoCT);
     }
 
-    // 5️⃣ Inventory items for these CT listing IDs
+    // 5️⃣ Inventory items for these CT listing IDs (for bins)
     const dbItems = await InventoryItem.find({
       cardTraderId: { $in: ctIds },
     })
@@ -137,7 +222,10 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 7️⃣ Build final lines
+    // 🔁 Per-request Scryfall context (resets on each order call)
+    const ctx = { lookups: 0 };
+
+    // 7️⃣ Build final lines (Scryfall images + bins)
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
@@ -147,25 +235,16 @@ router.get("/:id", async (req, res) => {
           ? inventoryMap.get(ctId)
           : null;
 
-        // 🔹 Decide blueprintId first – prefer Mongo, then fall back to CT id
+        // Decide blueprintId first – prefer Mongo, then fall back to CT id
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
             : it.cardTraderId ?? null;
 
-        //
-        // 💥 IMAGE LOGIC — CardTrader / Mongo ONLY 💥
-        //
+        // 💥 IMAGE LOGIC — Scryfall ONLY, but capped + cached 💥
         let image_url = null;
-
         if (!skipImages) {
-          // 1) Prefer Mongo imageUrl if it’s a full HTTP(S) URL
-          if (invItem?.imageUrl && /^https?:\/\//.test(invItem.imageUrl)) {
-            image_url = invItem.imageUrl;
-          } else if (resolvedBlueprintId) {
-            // 2) Otherwise, always use CardTrader blueprint CDN
-            image_url = `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`;
-          }
+          image_url = await getScryfallImageLimited(it.name, ctx);
         }
 
         //

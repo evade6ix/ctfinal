@@ -34,8 +34,7 @@ type OrderItem = {
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  image_url?: string;   // from /api/order-articles
-  imageUrl?: string;    // from /api/orders (new camelCase)
+  image_url?: string; // Scryfall URL from /api/order-articles or /image
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
@@ -53,6 +52,11 @@ export function OrdersWeeklyGroupedView() {
   >({});
 
   const [loadingItems, setLoadingItems] = useState(false);
+
+  // ✅ In-memory "picked" state: per orderId → per index
+  const [pickedByOrder, setPickedByOrder] = useState<
+    Record<string | number, Record<number, boolean>>
+  >({});
 
   // ───────────────────────────────────────────────
   // Initial weekly summaries
@@ -138,32 +142,30 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
-  // Image selection: DB image → CardTrader blueprint → local placeholder
+  // ⭐ Scryfall-only image selection: image_url → placeholder
   const getCardImageSrc = (it: OrderItem) => {
-    // 1) Prefer camelCase (from /api/orders) then snake_case (from /api/order-articles)
-    const dbImage = it.imageUrl || it.image_url;
-
-    if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
-      return dbImage;
+    if (
+      it.image_url &&
+      typeof it.image_url === "string" &&
+      it.image_url.startsWith("http")
+    ) {
+      return it.image_url;
     }
 
-    // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
-    const blueprintId = it.blueprintId ?? it.cardTraderId;
-    if (blueprintId) {
-      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-    }
-
-    // 3) FINAL fallback – your local placeholder
+    // FINAL fallback – local placeholder
     return "/card-placeholder.png";
   };
 
   // Load items for a single order from /api/order-articles/:id
+  // Now uses skipImages=1 to avoid Scryfall on initial load (faster)
   const loadItems = async (orderId: string | number) => {
     if (itemsByOrder[orderId]) return; // already cached
 
     try {
       setLoadingItems(true);
-      const res = await fetch(`/api/order-articles/${orderId}`);
+      const res = await fetch(
+        `/api/order-articles/${orderId}?skipImages=1`
+      );
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
@@ -193,9 +195,81 @@ export function OrdersWeeklyGroupedView() {
   const handleToggleOrder = (orderId: string | number) => {
     const willExpand = expandedOrderId !== orderId;
     setExpandedOrderId(willExpand ? orderId : null);
+
     if (willExpand) {
       loadItems(orderId);
     }
+  };
+
+  // On-demand: fetch real image for a single card by name
+  const handleShowImage = async (
+    orderId: string | number,
+    index: number,
+    item: OrderItem
+  ) => {
+    const name = item.name;
+    if (!name) return;
+
+    try {
+      const res = await fetch(
+        `/api/order-articles/image?name=${encodeURIComponent(name)}`
+      );
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        console.error(
+          `Failed to fetch image for ${name}: ${res.status}`,
+          txt.slice(0, 200)
+        );
+        return;
+      }
+
+      const json = (await res.json()) as { image_url?: string | null };
+      if (!json.image_url) {
+        console.warn("No image_url returned for", name);
+        return;
+      }
+
+      // Update just that one item in state
+      setItemsByOrder((prev) => {
+        const existing = prev[orderId];
+        if (!existing) return prev;
+
+        const clone = [...existing];
+        const original = clone[index];
+        if (!original) return prev;
+
+        clone[index] = {
+          ...original,
+          image_url: json.image_url || original.image_url,
+        };
+
+        return {
+          ...prev,
+          [orderId]: clone,
+        };
+      });
+    } catch (err) {
+      console.error("Error in handleShowImage:", err);
+    }
+  };
+
+  // Toggle picked state for a specific line item
+  const handleTogglePicked = (orderId: string | number, index: number) => {
+    setPickedByOrder((prev) => {
+      const forOrder = prev[orderId] || {};
+      const currentlyPicked = !!forOrder[index];
+
+      const updatedForOrder: Record<number, boolean> = {
+        ...forOrder,
+        [index]: !currentlyPicked,
+      };
+
+      return {
+        ...prev,
+        [orderId]: updatedForOrder,
+      };
+    });
   };
 
   return (
@@ -203,7 +277,7 @@ export function OrdersWeeklyGroupedView() {
       <Title order={3}>CardTrader Zero – Weekly Shipments</Title>
       <Text size="sm" c="dimmed">
         Every Wednesday → Tuesday. All PAID orders combined. Click an order to
-        see its cards sorted by bin and row.
+        see its cards sorted by bin and row. Images load on demand.
       </Text>
 
       {loading && (
@@ -346,67 +420,154 @@ export function OrdersWeeklyGroupedView() {
                                     </Text>
                                   )}
 
-                                {/* Line items */}
+                                {/* Line items – all at once, images on demand */}
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length > 0 && (
                                     <Stack gap="md">
-                                      {itemsByOrder[o.id].map((it, idx) => (
-                                        <Group
-                                          key={idx}
-                                          align="flex-start"
-                                          wrap="nowrap"
-                                          style={{
-                                            padding: "8px 0",
-                                            borderBottom: "1px solid #333",
-                                          }}
-                                        >
-                                          {/* IMAGE */}
-                                          <img
-                                            src={getCardImageSrc(it)}
-                                            width={50}
-                                            height={70}
-                                            style={{
-                                              objectFit: "cover",
-                                              borderRadius: 4,
-                                            }}
-                                            onError={(e) => {
-                                              (e.target as HTMLImageElement).src =
-                                                "/card-placeholder.png";
-                                            }}
-                                            alt={it.name || "Card image"}
-                                          />
+                                      {itemsByOrder[o.id].map(
+                                        (it, idx) => {
+                                          const isPicked =
+                                            !!pickedByOrder[o.id]?.[idx];
 
-                                          {/* DETAILS */}
-                                          <Box style={{ flex: 1 }}>
-                                            <Text fw={500}>
-                                              {it.name || "No name"}
-                                            </Text>
-                                            <Text size="xs" c="dimmed">
-                                              {it.set_name || "Unknown set"}
-                                            </Text>
+                                          return (
+                                            <Group
+                                              key={idx}
+                                              align="flex-start"
+                                              wrap="nowrap"
+                                              style={{
+                                                padding: "8px 12px",
+                                                borderBottom:
+                                                  "1px solid #333",
+                                                background: isPicked
+                                                  ? "rgba(46, 204, 113, 0.12)" // soft green
+                                                  : "transparent",
+                                                borderLeft: isPicked
+                                                  ? "3px solid #2ecc71"
+                                                  : "3px solid transparent",
+                                                borderRadius: 4,
+                                              }}
+                                            >
+                                              {/* IMAGE + BUTTON */}
+                                              <Box
+                                                style={{
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  alignItems: "center",
+                                                  marginRight: 16,
+                                                }}
+                                              >
+                                                <img
+                                                  src={getCardImageSrc(it)}
+                                                  width={140}
+                                                  height={196}
+                                                  style={{
+                                                    objectFit: "cover",
+                                                    borderRadius: 6,
+                                                  }}
+                                                  loading="lazy"
+                                                  decoding="async"
+                                                  onError={(e) => {
+                                                    (
+                                                      e.target as HTMLImageElement
+                                                    ).src =
+                                                      "/card-placeholder.png";
+                                                  }}
+                                                  alt={
+                                                    it.name || "Card image"
+                                                  }
+                                                />
+                                                <Button
+                                                  mt={6}
+                                                  size="xs"
+                                                  variant="subtle"
+                                                  onClick={() =>
+                                                    handleShowImage(
+                                                      o.id,
+                                                      idx,
+                                                      it
+                                                    )
+                                                  }
+                                                >
+                                                  Show image
+                                                </Button>
+                                              </Box>
 
-                                            <Text size="sm" mt={4}>
-                                              Qty: {it.quantity ?? "?"}
-                                            </Text>
+                                              {/* DETAILS + PICKED BUTTON */}
+                                              <Box
+                                                style={{
+                                                  flex: 1,
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  gap: 6,
+                                                }}
+                                              >
+                                                <Group
+                                                  justify="space-between"
+                                                  align="flex-start"
+                                                >
+                                                  <Box style={{ flex: 1 }}>
+                                                    <Text fw={500}>
+                                                      {it.name || "No name"}
+                                                    </Text>
+                                                    <Text
+                                                      size="xs"
+                                                      c="dimmed"
+                                                    >
+                                                      {it.set_name ||
+                                                        "Unknown set"}
+                                                    </Text>
 
-                                            {/* BIN LOCATIONS */}
-                                            <Group gap={6} mt={6}>
-                                              {(it.binLocations || []).map(
-                                                (b, i) => (
-                                                  <Badge
-                                                    key={i}
-                                                    color="yellow"
+                                                    <Text size="sm" mt={4}>
+                                                      Qty:{" "}
+                                                      {it.quantity ?? "?"}
+                                                    </Text>
+
+                                                    {/* BIN LOCATIONS */}
+                                                    <Group gap={6} mt={6}>
+                                                      {(
+                                                        it.binLocations || []
+                                                      ).map((b, i) => (
+                                                        <Badge
+                                                          key={i}
+                                                          color="yellow"
+                                                        >
+                                                          {b.bin ?? "?"} / Row{" "}
+                                                          {b.row ?? "?"} (x
+                                                          {b.quantity ?? "?"})
+                                                        </Badge>
+                                                      ))}
+                                                    </Group>
+                                                  </Box>
+
+                                                  <Button
+                                                    size="xs"
+                                                    variant={
+                                                      isPicked
+                                                        ? "filled"
+                                                        : "outline"
+                                                    }
+                                                    color={
+                                                      isPicked
+                                                        ? "green"
+                                                        : "gray"
+                                                    }
+                                                    onClick={() =>
+                                                      handleTogglePicked(
+                                                        o.id,
+                                                        idx
+                                                      )
+                                                    }
                                                   >
-                                                    {b.bin ?? "?"} / Row{" "}
-                                                    {b.row ?? "?"} (x
-                                                    {b.quantity ?? "?"})
-                                                  </Badge>
-                                                )
-                                              )}
+                                                    {isPicked
+                                                      ? "Picked"
+                                                      : "Mark picked"}
+                                                  </Button>
+                                                </Group>
+                                              </Box>
                                             </Group>
-                                          </Box>
-                                        </Group>
-                                      ))}
+                                          );
+                                        }
+                                      )}
                                     </Stack>
                                   )}
                               </Box>

@@ -66,20 +66,27 @@ router.get("/:id", async (req, res) => {
     const orderRes = await client.get(`/orders/${id}`);
     const order = orderRes.data || {};
 
-    // 2️⃣ CT already gives items inline
-    const rawItems = Array.isArray(order.order_items)
-      ? order.order_items
-      : [];
+    // 2️⃣ Extract line items (be generous about shape)
+    let rawItems = [];
+    if (Array.isArray(order.order_items)) {
+      rawItems = order.order_items;
+    } else if (Array.isArray(order.items)) {
+      rawItems = order.items;
+    } else if (order.order_items && Array.isArray(order.order_items.data)) {
+      rawItems = order.order_items.data;
+    } else if (order.items && Array.isArray(order.items.data)) {
+      rawItems = order.items.data;
+    }
 
     if (debug) {
-      return res.json({ order, order_items: rawItems });
+      return res.json({ order, rawItems });
     }
 
     // 3️⃣ Normalize base items
     const baseItems = rawItems.map((a) => ({
       id: a.id,
-      cardTraderId: a.product_id ?? null,
-      blueprintId: null,
+      cardTraderId: a.product_id ?? null,  // CT listing / product id
+      blueprintId: a.blueprint_id ?? null, // CT blueprint id (like Catalog uses)
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
       set_name: a.expansion || null,
@@ -159,7 +166,6 @@ router.get("/:id", async (req, res) => {
             // 2) Otherwise, always use CardTrader blueprint CDN
             image_url = `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`;
           }
-          // ⚠️ No Scryfall here – Catalog + Orders stay visually consistent.
         }
 
         //

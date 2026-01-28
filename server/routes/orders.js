@@ -2,12 +2,13 @@
 import express from "express";
 import { ct } from "../ctClient.js";
 import { OrderAllocation } from "../models/OrderAllocation.js";
+import { InventoryItem } from "../models/InventoryItem.js";
 
 const router = express.Router();
 
 // =======================================================
 // GET /api/orders
-//  - Lists orders with allocated flag (no in-memory cache)
+//  - Lists orders with allocated flag + ITEMS + imageUrl
 // =======================================================
 router.get("/", async (req, res) => {
   try {
@@ -36,48 +37,98 @@ router.get("/", async (req, res) => {
     }
 
     console.log("Fetched", allOrders.length, "orders");
-    if (allOrders.length > 0) {
-      console.log("DEBUG /api/orders sample order:", allOrders[0]);
-    }
 
-    const mapped = allOrders.map((o) => {
-  // ✅ Prefer the created_at of the first order item
-  let rawCreated = null;
+    // 🔥 Build full orders INCLUDING ITEMS + imageUrl
+    const mapped = await Promise.all(
+      allOrders.map(async (o) => {
+        //
+        // ============ CREATED_AT LOGIC (unchanged) ============
+        //
+        let rawCreated = null;
 
-  if (Array.isArray(o.order_items) && o.order_items.length > 0) {
-    rawCreated = o.order_items[0].created_at || null;
-  }
+        if (Array.isArray(o.order_items) && o.order_items.length > 0) {
+          rawCreated = o.order_items[0].created_at || null;
+        }
 
-  // 🔁 Fallback: derive a date from the order code (YYYYMMDDxxxx)
-  if (!rawCreated && o.code && o.code.length >= 8) {
-    const d = o.code.substring(0, 8); // e.g. "20260124"
-    const year = d.substring(0, 4);
-    const month = d.substring(4, 6);
-    const day = d.substring(6, 8);
-    // Build a UTC midnight timestamp so frontend can still format it
-    rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
-  }
+        if (!rawCreated && o.code && o.code.length >= 8) {
+          const d = o.code.substring(0, 8);
+          const year = d.substring(0, 4);
+          const month = d.substring(4, 6);
+          const day = d.substring(6, 8);
+          rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
+        }
 
-  return {
-    id: o.id, // numeric id used everywhere
-    code: o.code,
-    state: o.state,
-    orderAs: o.order_as,
-    buyer: o.buyer || null,
-    size: o.size,
+        //
+        // ============ EXTRACT SIMPLE LINE ITEMS FROM CT ============
+        //
+        let rawItems = [];
+        if (Array.isArray(o.order_items)) rawItems = o.order_items;
+        else if (Array.isArray(o.items)) rawItems = o.items;
+        else if (o.order_items?.data) rawItems = o.order_items.data;
+        else if (o.items?.data) rawItems = o.items.data;
 
-    // ✅ Final createdAt value (UTC-ish ISO string)
-    createdAt: rawCreated,
+        const baseItems = rawItems.map((it) => ({
+          id: it.id,
+          cardTraderId: it.product_id ?? null,
+          name: it.name || "Unknown item",
+          quantity: it.quantity ?? 0,
+        }));
 
-    sellerTotalCents: o.seller_total?.cents ?? null,
-    sellerTotalCurrency: o.seller_total?.currency ?? null,
-    formattedTotal: o.formatted_total ?? null,
-    // allocated filled below
-  };
-});
+        //
+        // ============ LOOK UP IMAGEURL FROM MONGO ============
+        //
+        const ctIds = baseItems
+          .map((i) => Number(i.cardTraderId))
+          .filter((x) => Number.isFinite(x));
 
+        const invItems = await InventoryItem.find({
+          cardTraderId: { $in: ctIds },
+        }).lean();
 
-    // 🔹 Figure out which orders already have allocations
+        const invMap = new Map();
+        for (const inv of invItems) {
+          invMap.set(Number(inv.cardTraderId), inv);
+        }
+
+        const finalItems = baseItems.map((it) => {
+          const inv = invMap.get(Number(it.cardTraderId));
+          let imageUrl = null;
+
+          if (inv?.imageUrl) {
+            imageUrl = inv.imageUrl;
+          } else if (inv?.blueprintId) {
+            imageUrl = `https://img.cardtrader.com/blueprints/${inv.blueprintId}/front.jpg`;
+          }
+
+          return {
+            ...it,
+            imageUrl,
+          };
+        });
+
+        //
+        // RETURN ORDER WITH ITEMS + IMAGEURLs
+        //
+        return {
+          id: o.id,
+          code: o.code,
+          state: o.state,
+          orderAs: o.order_as,
+          buyer: o.buyer || null,
+          size: o.size,
+          createdAt: rawCreated,
+          sellerTotalCents: o.seller_total?.cents ?? null,
+          sellerTotalCurrency: o.seller_total?.currency ?? null,
+          formattedTotal: o.formatted_total ?? null,
+
+          items: finalItems, // 🔥 IMPORTANT: YOUR IMAGES LIVE HERE
+        };
+      })
+    );
+
+    // ================================================================
+    // Attach allocation flags (unchanged)
+    // ================================================================
     const orderIdStrings = mapped.map((o) => String(o.id));
     const allocations = await OrderAllocation.find(
       { orderId: { $in: orderIdStrings } },
@@ -99,10 +150,7 @@ router.get("/", async (req, res) => {
 });
 
 // =======================================================
-// POST /api/orders/sync
-//  - For each Zero order in hub_pending/paid/sent that
-//    has no allocations yet, call /api/order-articles/:id
-//    so bins are deducted & OrderAllocation rows are written.
+// POST /api/orders/sync  (unchanged)
 // =======================================================
 router.post("/sync", async (req, res) => {
   try {
@@ -125,7 +173,7 @@ router.post("/sync", async (req, res) => {
       page++;
     }
 
-    // Debug: state counts
+    // Debug:
     const stateCounts = {};
     for (const o of allOrders) {
       const s = o.state ?? o.status ?? "UNKNOWN";
@@ -134,23 +182,13 @@ router.post("/sync", async (req, res) => {
     console.log("DEBUG /api/orders/sync states:", stateCounts);
     console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
 
-       // Only decrement according to CardTrader docs:
-    // - via_cardtrader_zero = true  && state = hub_pending  → YES
-    // - via_cardtrader_zero = false && state = paid        → YES
-    // - anything else                                      → NO
     const eligible = allOrders.filter((o) => {
       const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
 
-      if (isZero) {
-        // CardTrader Zero orders → only hub_pending should decrement stock
-        return state === "hub_pending";
-      } else {
-        // Normal (non-Zero) orders → only paid should decrement stock
-        return state === "paid";
-      }
+      if (isZero) return state === "hub_pending";
+      else return state === "paid";
     });
-
 
     let triggered = 0;
     let skippedAlreadyAllocated = 0;
@@ -159,7 +197,6 @@ router.post("/sync", async (req, res) => {
     for (const o of eligible) {
       const orderIdStr = String(o.id);
 
-      // Skip if *any* allocation exists for this order
       const hasAnyAlloc = await OrderAllocation.exists({ orderId: orderIdStr });
       if (hasAnyAlloc) {
         skippedAlreadyAllocated++;

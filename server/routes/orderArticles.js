@@ -76,15 +76,20 @@ router.get("/:id", async (req, res) => {
     console.log("📦 order_items length:", rawItems.length);
 
     // 2️⃣ Base shape from CT API (one per order line)
-    const baseItems = rawItems.map((a) => ({
-      id: a.id,
-      cardTraderId: a.product_id ?? null,
-      name: a.name || "Unknown item",
-      quantity: a.quantity ?? 0,
-      set_name: a.expansion || null,
-      image_url: null,
-      binLocations: [],
-    }));
+const baseItems = rawItems.map((a) => ({
+  id: a.id,
+  cardTraderId: a.product_id ?? null,
+
+  // we'll override this from Mongo if we have it
+  blueprintId: null,
+
+  name: a.name || "Unknown item",
+  quantity: a.quantity ?? 0,
+  set_name: a.expansion || null,
+  image_url: null,
+  binLocations: [],
+}));
+
 
     // Collect all CT listing IDs
     const ctIds = baseItems.map((i) => i.cardTraderId).filter((x) => x != null);
@@ -148,14 +153,23 @@ router.get("/:id", async (req, res) => {
       }
     }
 
-    // If the line is weird / invalid, just return image + empty bins
-    if (!Number.isFinite(ctId) || requestedQty <= 0) {
+    // 🔹 Decide the blueprintId we send to the UI
+    // Prefer InventoryItem.blueprintId, fallback to CT listing id
+    const resolvedBlueprintId =
+      (invItem && invItem.blueprintId) != null
+        ? invItem.blueprintId
+        : it.cardTraderId ?? null;
+
+
+        if (!Number.isFinite(ctId) || requestedQty <= 0) {
       return {
         ...it,
+        blueprintId: resolvedBlueprintId,
         image_url,
         binLocations: [],
       };
     }
+
 
     // If we already have an allocation for this (order + cardTraderId),
     // reuse it and DON'T re-deduct from inventory.
@@ -175,6 +189,7 @@ router.get("/:id", async (req, res) => {
 
       return {
         ...it,
+        blueprintid: resolveBlueprintId,
         image_url,
         binLocations,
       };
@@ -184,6 +199,7 @@ router.get("/:id", async (req, res) => {
     if (!invItem || !Array.isArray(invItem.locations)) {
       return {
         ...it,
+        blueprintId: resolvedBlueprintId,
         image_url,
         binLocations: [],
       };
@@ -250,6 +266,7 @@ router.get("/:id", async (req, res) => {
 
     return {
       ...it,
+      blueprintId: resolvedBlueprintId,
       image_url,
       binLocations,
     };

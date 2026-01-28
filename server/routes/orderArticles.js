@@ -8,7 +8,9 @@ import { allocateFromBins } from "../utils/allocateFromBins.js";
 
 const router = express.Router();
 
-// Helper: Scryfall lookup by exact card name
+/**
+ * Helper: Scryfall lookup by exact card name
+ */
 async function getScryfallImage(cardName) {
   if (!cardName) return null;
   try {
@@ -50,95 +52,74 @@ async function getScryfallImage(cardName) {
 }
 
 /**
- * Recursively scan the order object and grab the first array
- * that looks like an order-items array:
- *  - objects with product_id, OR
- *  - objects with name + quantity
- */
-function findOrderItems(node) {
-  if (!node) return null;
-
-  if (Array.isArray(node)) {
-    if (node.length > 0 && typeof node[0] === "object" && node[0] !== null) {
-      const first = node[0];
-
-      // Typical CardTrader shape
-      if ("product_id" in first || "blueprint_id" in first) {
-        return node;
-      }
-
-      // Fallback: looks like an order line
-      if ("name" in first && "quantity" in first) {
-        return node;
-      }
-    }
-    return null;
-  }
-
-  if (typeof node === "object") {
-    for (const key of Object.keys(node)) {
-      const found = findOrderItems(node[key]);
-      if (found) return found;
-    }
-  }
-
-  return null;
-}
-
-/**
  * GET /api/order-articles/:id
- * Fetch items inside a CardTrader order, allocate from bins (once),
- * store that allocation in Mongo, and always return the picked bins
- * for each line item.
  *
- * Query params:
- *   - debug=1      → return raw CardTrader order JSON (no allocation)
- *   - skipImages=1 → don't call Scryfall (just use Mongo or CT CDN)
+ * - Fetches a single CardTrader order header (/orders/:id)
+ * - Uses order.order_items (CT already includes them)
+ * - Allocates from your bins (once) & stores in OrderAllocation
+ * - Always returns array of line items with:
+ *   { id, cardTraderId, blueprintId, name, quantity, set_name, image_url, binLocations[] }
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const orderIdStr = String(id);
 
-  const debug = req.query.debug === "1" || req.query.debug === "true";
-  const skipImages =
-    req.query.skipImages === "1" || req.query.skipImages === "true";
+  // allow background sync to skip Scryfall calls
+  const skipImages = req.query.skipImages === "1";
+  const debug = req.query.debug === "1";
 
   try {
     const client = ct();
-    console.log("🔎 Fetching order items for order id:", id);
 
-    // 1️⃣ Fetch the single order from CardTrader
-    const r = await client.get(`/orders/${id}`);
-    console.log("✅ CardTrader /orders/:id status:", r.status);
+    console.log("🔎 Fetching CardTrader order for id:", id);
 
-    const order = r.data || {};
+    // 1️⃣ Fetch the single order (header + items inline)
+    const orderRes = await client.get(`/orders/${id}`);
+    console.log("✅ /orders/:id status:", orderRes.status);
+    const order = orderRes.data || {};
 
-    // If debug=1 → just return the raw CardTrader order so we can inspect shape
+    // 2️⃣ Pull order_items directly from the order object
+    const rawItems = Array.isArray(order.order_items)
+      ? order.order_items
+      : [];
+
+    console.log("📦 order_items count:", rawItems.length);
+
+    // Optional debug: let you see raw CT payload
     if (debug) {
-      return res.json(order);
+      return res.json({
+        order,
+        order_items: rawItems,
+      });
     }
-
-    // 2️⃣ Extract order lines using recursive finder
-    const rawItems = findOrderItems(order) || [];
-    console.log("📦 extracted order_items length:", rawItems.length);
 
     // 3️⃣ Base shape from CT API (one per order line)
     const baseItems = rawItems.map((a) => ({
       id: a.id,
+      // listing / product id
       cardTraderId: a.product_id ?? null,
 
       // we'll override this from Mongo if we have it
-      blueprintId: a.blueprint_id ?? null,
+      blueprintId: null,
 
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
-      set_name: a.expansion || a.set_name || null,
+      // CT calls it `expansion`; keep same key your UI expects
+      set_name: a.expansion || null,
+
       image_url: null,
       binLocations: [],
     }));
 
+    // If there are truly no items, just short-circuit
+    if (!baseItems.length) {
+      return res.json([]);
+    }
+
     // Collect all CT listing IDs
-    const ctIds = baseItems.map((i) => i.cardTraderId).filter((x) => x != null);
+    const ctIds = baseItems
+      .map((i) => i.cardTraderId)
+      .filter((x) => x != null);
 
     // If nothing has cardTraderId, just do Scryfall and return (unless skipping)
     if (!ctIds.length) {
@@ -176,18 +157,18 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 6️⃣ Build final response, allocating from bins if needed
+    // 6️⃣ Build final line items (allocate if needed, attach bins + images)
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
         const requestedQty = Number(it.quantity) || 0;
 
-        // 🔹 Try to pull InventoryItem first (even if we already have an allocation)
+        // Try to pull InventoryItem first (for image + locations)
         const invItem = Number.isFinite(ctId)
           ? inventoryMap.get(ctId)
           : null;
 
-        // 🔹 Decide the image_url:
+        // Decide image_url:
         // 1) If skipImages=1 → always null
         // 2) Else prefer Mongo's imageUrl
         // 3) Fallback to Scryfall only if Mongo has no image
@@ -200,16 +181,14 @@ router.get("/:id", async (req, res) => {
           }
         }
 
-        // 🔹 Decide the blueprintId we send to the UI
+        // Decide the blueprintId we send to the UI
         // Prefer InventoryItem.blueprintId, fallback to CT listing id
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
-            : it.blueprintId != null
-            ? it.blueprintId
             : it.cardTraderId ?? null;
 
-        // If weird / invalid line, just return basic info
+        // If the line is weird / invalid, just return image + empty bins
         if (!Number.isFinite(ctId) || requestedQty <= 0) {
           return {
             ...it,
@@ -219,7 +198,7 @@ router.get("/:id", async (req, res) => {
           };
         }
 
-        // If we already have an allocation for this (order + cardTraderId),
+        // If we already have an allocation (order + cardTraderId),
         // reuse it and DON'T re-deduct from inventory.
         const existingAlloc = allocationMap.get(ctId);
         if (existingAlloc) {
@@ -280,7 +259,6 @@ router.get("/:id", async (req, res) => {
           0,
           (invItem.totalQuantity || 0) - fulfilledQty
         );
-
         await invItem.save();
 
         // 8️⃣ Save OrderAllocation so we don't re-allocate on future calls
@@ -328,7 +306,7 @@ router.get("/:id", async (req, res) => {
     const data = err?.response?.data;
     const url = err?.config?.url;
 
-    console.error("❌ Failed to fetch order items");
+    console.error("❌ Failed to fetch order or items");
     console.error("   ↳ URL:", url);
     console.error("   ↳ Status:", status);
     console.error("   ↳ Data:", data || err.message || err);

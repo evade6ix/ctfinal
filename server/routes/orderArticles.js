@@ -168,18 +168,29 @@ router.get("/:id", async (req, res) => {
           ? inventoryMap.get(ctId)
           : null;
 
-        // Decide image_url:
-        // 1) If skipImages=1 → always null
-        // 2) Else prefer Mongo's imageUrl
-        // 3) Fallback to Scryfall only if Mongo has no image
-        let image_url = null;
-        if (!skipImages) {
-          if (invItem?.imageUrl) {
-            image_url = invItem.imageUrl;
-          } else {
-            image_url = await getScryfallImage(it.name);
-          }
-        }
+        // Decide image_url: Mongo → CardTrader blueprint → Scryfall
+let image_url = null;
+
+if (!skipImages) {
+  // 1) Try Mongo imageUrl
+  if (invItem?.imageUrl) {
+    image_url = invItem.imageUrl;
+  }
+
+  // 2) If no Mongo image, ALWAYS use CardTrader blueprint CDN
+  if (!image_url) {
+    const blueprint = invItem?.blueprintId ?? it.cardTraderId;
+    if (blueprint) {
+      image_url = `https://img.cardtrader.com/blueprints/${blueprint}/front.jpg`;
+    }
+  }
+
+  // 3) Last resort → Scryfall
+  if (!image_url) {
+    image_url = await getScryfallImage(it.name);
+  }
+}
+
 
         // Decide the blueprintId we send to the UI
         // Prefer InventoryItem.blueprintId, fallback to CT listing id

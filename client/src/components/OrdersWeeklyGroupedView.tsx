@@ -137,22 +137,23 @@ export function OrdersWeeklyGroupedView() {
     });
   };
 
-  // Image selection: DB image → CardTrader blueprint → placeholder
-  const getCardImageSrc = (it: OrderItem) => {
-    // 1) Explicit image_url from backend / Mongo
-    if (it.image_url && it.image_url.startsWith("http")) {
-      return it.image_url;
-    }
+// Image selection: DB image → CardTrader blueprint → local placeholder
+const getCardImageSrc = (it: OrderItem) => {
+  // 1) Explicit image_url from backend / Mongo
+  if (it.image_url && it.image_url.startsWith("http")) {
+    return it.image_url;
+  }
 
-    // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
-    const blueprintId = it.blueprintId ?? it.cardTraderId;
-    if (blueprintId) {
-      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-    }
+  // 2) CardTrader blueprint CDN, prefer blueprintId over cardTraderId
+  const blueprintId = it.blueprintId ?? it.cardTraderId;
+  if (blueprintId) {
+    return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
+  }
 
-    // 3) Local / generic placeholder
-    return "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
-  };
+  // 3) Local / generic placeholder (you can point this to any image in /public)
+  return "/card-placeholder.png";
+};
+
 
   // Load items for a single order from /api/order-articles/:id
   const loadItems = async (orderId: string | number) => {
@@ -359,19 +360,19 @@ export function OrdersWeeklyGroupedView() {
                                         >
                                           {/* IMAGE */}
                                           <img
-                                            src={getCardImageSrc(it)}
-                                            width={50}
-                                            height={70}
-                                            style={{
-                                              objectFit: "cover",
-                                              borderRadius: 4,
-                                            }}
-                                            onError={(e) => {
-                                              (e.target as HTMLImageElement).src =
-                                                "https://cards.scryfall.io/large/front/0/1/placeholder.jpg";
-                                            }}
-                                            alt={it.name || "Card image"}
-                                          />
+  src={getCardImageSrc(it)}
+  width={50}
+  height={70}
+  style={{
+    objectFit: "cover",
+    borderRadius: 4,
+  }}
+  onError={(e) => {
+    // if CardTrader URL 404s, fall back to local placeholder, not Scryfall
+    (e.target as HTMLImageElement).src = "/card-placeholder.png";
+  }}
+  alt={it.name || "Card image"}
+/>
 
                                           {/* DETAILS */}
                                           <Box style={{ flex: 1 }}>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Box,
@@ -12,20 +12,16 @@ import {
   Title,
 } from "@mantine/core";
 
-type ApiOrder = {
+type OrderSummary = {
   id: number | string;
   code?: string;
   state?: string | null;
+  orderAs?: string | null;
   createdAt?: string | null;
   formattedTotal?: string | null;
-};
 
-type WeeklySummary = {
-  weekStart: string; // e.g. "2026-01-20"
-  totalOrders: number;
-  totalValueCents: number;
-  totalValue?: string; // added in backend
-  orders: ApiOrder[];
+  sellerTotalCents?: number | null;
+  sellerTotalCurrency?: string | null;
 };
 
 type DailySummary = {
@@ -33,7 +29,7 @@ type DailySummary = {
   totalOrders: number;
   totalValueCents: number;
   totalValue: string;
-  orders: ApiOrder[];
+  orders: OrderSummary[];
 };
 
 // Line item coming back from /api/order-articles/:id
@@ -57,8 +53,6 @@ type DailyLine = {
   bin: string;
   row?: number;
   quantity: number;
-  // extra fields if needed later
-  [key: string]: any;
 };
 
 const API_BASE = "/api";
@@ -95,55 +89,61 @@ function sortDailyLines(lines: DailyLine[]): DailyLine[] {
 }
 
 export function OrdersDailyView() {
-  const [weeklyData, setWeeklyData] = useState<WeeklySummary[]>([]);
+  const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [linesLoading, setLinesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // date -> header stats (orders + total value)
+  const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
   // date -> aggregated picking lines for that date
   const [dailyLinesByDate, setDailyLinesByDate] = useState<
     Record<string, DailyLine[]>
   >({});
 
-  // 1) Fetch the same data the Weekly view uses: /api/orders-weekly
+  // 1) Fetch all orders from /api/orders (same as OrdersView)
   useEffect(() => {
-    async function fetchWeekly() {
+    async function fetchOrders() {
       try {
         setLoading(true);
         setError(null);
 
-        const res = await fetch(`${API_BASE}/orders-weekly`);
+        const res = await fetch(`${API_BASE}/orders`);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
         }
-        const data: WeeklySummary[] = await res.json();
-        setWeeklyData(data || []);
+
+        const data: OrderSummary[] = await res.json();
+        setOrders(data || []);
       } catch (err: any) {
-        console.error("Failed to fetch weekly orders:", err);
-        setError(err?.message ?? "Failed to fetch weekly orders");
+        console.error("Failed to fetch orders:", err);
+        setError(err?.message ?? "Failed to fetch orders");
       } finally {
         setLoading(false);
       }
     }
 
-    fetchWeekly();
+    fetchOrders();
   }, []);
 
-  // 2) Build daily summaries for header stats (orders + total $ per day)
-  const dailySummaries: DailySummary[] = useMemo(() => {
+  // 2) Build per-day header stats (order count + total C$)
+  useEffect(() => {
+    if (!orders.length) {
+      setDailySummaries([]);
+      return;
+    }
+
     const map = new Map<
       string,
-      { totalOrders: number; totalValueCents: number; orders: ApiOrder[] }
+      { totalOrders: number; totalValueCents: number; orders: OrderSummary[] }
     >();
 
-    const allOrders: ApiOrder[] = weeklyData.flatMap((w) => w.orders || []);
-
-    for (const order of allOrders) {
+    for (const order of orders) {
       if (!order.createdAt) continue;
 
       const dateKey = new Date(order.createdAt).toISOString().slice(0, 10); // "YYYY-MM-DD"
 
-      // Try to parse value from formattedTotal like "C$0.88"
+      // Try formattedTotal first, fallback to sellerTotalCents
       let cents = 0;
       if (order.formattedTotal) {
         const cleaned = order.formattedTotal.replace(/[^\d.,-]/g, "");
@@ -152,6 +152,8 @@ export function OrdersDailyView() {
         if (!Number.isNaN(num)) {
           cents = Math.round(num * 100);
         }
+      } else if (order.sellerTotalCents) {
+        cents = order.sellerTotalCents;
       }
 
       if (!map.has(dateKey)) {
@@ -168,7 +170,6 @@ export function OrdersDailyView() {
       bucket.orders.push(order);
     }
 
-    // Turn map → array, sort by date desc
     const result: DailySummary[] = Array.from(map.entries())
       .map(([date, bucket]) => ({
         date,
@@ -177,27 +178,26 @@ export function OrdersDailyView() {
         totalValue: `C$${(bucket.totalValueCents / 100).toFixed(2)}`,
         orders: bucket.orders,
       }))
-      .sort((a, b) => (a.date < b.date ? 1 : -1));
+      .sort((a, b) => (a.date < b.date ? 1 : -1)); // newest date first
 
-    return result;
-  }, [weeklyData]);
+    setDailySummaries(result);
+  }, [orders]);
 
   // 3) For each order, fetch /api/order-articles/:id and aggregate per day
   useEffect(() => {
     async function buildDailyLines() {
-      if (!weeklyData.length) return;
+      if (!orders.length) {
+        setDailyLinesByDate({});
+        return;
+      }
 
       setLinesLoading(true);
       try {
-        const allOrders: ApiOrder[] = weeklyData.flatMap(
-          (w) => w.orders || []
-        );
-
         // Intermediate: date -> key -> DailyLine
         const byDate: Record<string, Record<string, DailyLine>> = {};
 
         await Promise.all(
-          allOrders.map(async (order) => {
+          orders.map(async (order) => {
             if (!order.createdAt) return;
 
             const dateKey = new Date(order.createdAt)
@@ -210,7 +210,11 @@ export function OrdersDailyView() {
                 `${API_BASE}/order-articles/${order.id}`
               );
               if (!res.ok) {
-                // don't blow up the whole day if one order fails
+                console.error(
+                  "order-articles failed for",
+                  order.id,
+                  res.status
+                );
                 return;
               }
               items = await res.json();
@@ -284,17 +288,16 @@ export function OrdersDailyView() {
     }
 
     buildDailyLines();
-  }, [weeklyData]);
+  }, [orders]);
 
   return (
     <Box p="md">
       <Group justify="space-between" mb="md" align="flex-start">
         <div>
-          <Title order={2}>Daily Sales (CardTrader Zero)</Title>
+          <Title order={2}>Daily Sales</Title>
           <Text c="dimmed" size="sm">
-            Same orders as the weekly Zero view, regrouped by calendar day,
-            with a bin / row / set / card picking list so you can pull cards
-            every day.
+            All CardTrader orders grouped by calendar day, with a bin / row / set / card
+            picking list so you can pull cards every day instead of once per week.
           </Text>
         </div>
       </Group>
@@ -321,7 +324,7 @@ export function OrdersDailyView() {
 
       {!loading && !error && dailySummaries.length === 0 && (
         <Text c="dimmed" mt="md">
-          No orders found in the weekly Zero window.
+          No orders found.
         </Text>
       )}
 

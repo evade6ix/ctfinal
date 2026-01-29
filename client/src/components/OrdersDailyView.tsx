@@ -57,6 +57,15 @@ type DailyLine = {
 
 const API_BASE = "/api";
 
+// 👉 Helper: get YYYY-MM-DD in America/Toronto
+function getTorontoDateKey(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-CA", {
+    timeZone: "America/Toronto",
+  }); // "YYYY-MM-DD"
+}
+
 // 👉 Sorting helper: Bin → Row → Set → Card name
 function sortDailyLines(lines: DailyLine[]): DailyLine[] {
   return [...lines].sort((a, b) => {
@@ -128,7 +137,12 @@ export function OrdersDailyView() {
 
   // 2) Build per-day header stats (order count + total C$)
   useEffect(() => {
-    if (!orders.length) {
+    // Only use Zero / hub_pending orders
+    const zeroOrders = orders.filter(
+      (o) => o.orderAs === "hub_pending"
+    );
+
+    if (!zeroOrders.length) {
       setDailySummaries([]);
       return;
     }
@@ -138,10 +152,9 @@ export function OrdersDailyView() {
       { totalOrders: number; totalValueCents: number; orders: OrderSummary[] }
     >();
 
-    for (const order of orders) {
-      if (!order.createdAt) continue;
-
-      const dateKey = new Date(order.createdAt).toISOString().slice(0, 10); // "YYYY-MM-DD"
+    for (const order of zeroOrders) {
+      const dateKey = getTorontoDateKey(order.createdAt);
+      if (!dateKey) continue;
 
       // Try formattedTotal first, fallback to sellerTotalCents
       let cents = 0;
@@ -183,10 +196,14 @@ export function OrdersDailyView() {
     setDailySummaries(result);
   }, [orders]);
 
-  // 3) For each order, fetch /api/order-articles/:id and aggregate per day
+  // 3) For each Zero order, fetch /api/order-articles/:id and aggregate per day
   useEffect(() => {
     async function buildDailyLines() {
-      if (!orders.length) {
+      const zeroOrders = orders.filter(
+        (o) => o.orderAs === "hub_pending"
+      );
+
+      if (!zeroOrders.length) {
         setDailyLinesByDate({});
         return;
       }
@@ -197,12 +214,9 @@ export function OrdersDailyView() {
         const byDate: Record<string, Record<string, DailyLine>> = {};
 
         await Promise.all(
-          orders.map(async (order) => {
-            if (!order.createdAt) return;
-
-            const dateKey = new Date(order.createdAt)
-              .toISOString()
-              .slice(0, 10); // "YYYY-MM-DD"
+          zeroOrders.map(async (order) => {
+            const dateKey = getTorontoDateKey(order.createdAt);
+            if (!dateKey) return;
 
             let items: OrderItem[] = [];
             try {
@@ -294,9 +308,10 @@ export function OrdersDailyView() {
     <Box p="md">
       <Group justify="space-between" mb="md" align="flex-start">
         <div>
-          <Title order={2}>Daily Sales</Title>
+          <Title order={2}>Daily Sales (Zero / hub_pending)</Title>
           <Text c="dimmed" size="sm">
-            All CardTrader orders grouped by calendar day, with a bin / row / set / card
+            Only CardTrader <strong>hub_pending</strong> (Zero) orders,
+            grouped by Toronto calendar day, with a bin / row / set / card
             picking list so you can pull cards every day instead of once per week.
           </Text>
         </div>
@@ -324,7 +339,7 @@ export function OrdersDailyView() {
 
       {!loading && !error && dailySummaries.length === 0 && (
         <Text c="dimmed" mt="md">
-          No orders found.
+          No <strong>hub_pending</strong> orders found.
         </Text>
       )}
 

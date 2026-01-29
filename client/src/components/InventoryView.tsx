@@ -28,7 +28,6 @@ type Location = {
   row: number;
   quantity: number;
 };
-
 type InventoryItem = {
   _id: string;
   cardTraderId?: number;
@@ -39,6 +38,7 @@ type InventoryItem = {
   isFoil?: boolean;
   price?: number;
   totalQuantity: number;
+  mtgColors?: string;        // 👈 NEW FIELD (e.g. "G", "UR", "WUBRG")
   locations: Location[];
 };
 
@@ -411,25 +411,31 @@ export function InventoryView() {
                 {filteredItems.map((item) => (
                   <Table.Tr key={item._id}>
                     <Table.Td>
-                      <Text fw={500}>{item.name || "(no name)"}</Text>
-                      <Group gap="xs" mt={2}>
-                        {item.cardTraderId && (
-                          <Text size="xs" c="dimmed">
-                            CT ID: {item.cardTraderId}
-                          </Text>
-                        )}
-                        {item.condition && (
-                          <Badge size="xs" variant="outline">
-                            {item.condition}
-                          </Badge>
-                        )}
-                        {item.isFoil && (
-                          <Badge size="xs" color="yellow" variant="outline">
-                            Foil
-                          </Badge>
-                        )}
-                      </Group>
-                    </Table.Td>
+  <Text fw={500}>{item.name || "(no name)"}</Text>
+  <Group gap="xs" mt={2}>
+    {item.cardTraderId && (
+      <Text size="xs" c="dimmed">
+        CT ID: {item.cardTraderId}
+      </Text>
+    )}
+    {item.condition && (
+      <Badge size="xs" variant="outline">
+        {item.condition}
+      </Badge>
+    )}
+    {item.isFoil && (
+      <Badge size="xs" color="yellow" variant="outline">
+        Foil
+      </Badge>
+    )}
+    {item.mtgColors && (
+      <Badge size="xs" variant="outline">
+        {item.mtgColors}
+      </Badge>
+    )}
+  </Group>
+</Table.Td>
+
                     <Table.Td>
                       <Text>{item.setCode || "-"}</Text>
                     </Table.Td>

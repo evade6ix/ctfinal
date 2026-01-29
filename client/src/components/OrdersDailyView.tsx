@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import {
   Badge,
   Box,
+  Button,
   Card,
   Group,
+  Image,
   Loader,
+  Pagination,
   Paper,
   ScrollArea,
+  Stack,
   Table,
   Text,
   Title,
@@ -40,8 +44,9 @@ type OrderItem = {
   name?: string;
   quantity?: number;
   set_name?: string; // e.g. "Ikoria: Lair of Behemoths"
-  setCode?: string;  // if you ever add this later
+  setCode?: string; // if you ever add this later
   binLocations?: { bin: string; row: number; quantity: number }[];
+  image_url?: string; // 👈 carry through from backend like grouped view
 };
 
 // Aggregated daily picking line
@@ -53,9 +58,11 @@ type DailyLine = {
   bin: string;
   row?: number;
   quantity: number;
+  image_url?: string; // 👈 add image_url to the aggregated line
 };
 
 const API_BASE = "/api";
+const PER_PAGE = 10;
 
 // 👉 Helper: get YYYY-MM-DD in America/Toronto
 function getTorontoDateKey(iso?: string | null): string | null {
@@ -108,6 +115,14 @@ export function OrdersDailyView() {
   // date -> aggregated picking lines for that date
   const [dailyLinesByDate, setDailyLinesByDate] = useState<
     Record<string, DailyLine[]>
+  >({});
+
+  // date -> current page (for per-day pagination)
+  const [pageByDate, setPageByDate] = useState<Record<string, number>>({});
+
+  // key (bin|row|set|name) -> whether image is open
+  const [imageOpenByKey, setImageOpenByKey] = useState<
+    Record<string, boolean>
   >({});
 
   // 1) Fetch all orders from /api/orders (same as OrdersView)
@@ -279,7 +294,13 @@ export function OrdersDailyView() {
                     bin: binLabel,
                     row: typeof rowVal === "number" ? rowVal : undefined,
                     quantity: 0,
+                    image_url: it.image_url, // 👈 initial image
                   };
+                }
+
+                // If we don't have an image yet but this item does, fill it in
+                if (!bucket[key].image_url && it.image_url) {
+                  bucket[key].image_url = it.image_url;
                 }
 
                 const qtyAdd = loc.quantity ?? it.quantity ?? 0;
@@ -303,6 +324,13 @@ export function OrdersDailyView() {
 
     buildDailyLines();
   }, [orders]);
+
+  const toggleImageForKey = (key: string) => {
+    setImageOpenByKey((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   return (
     <Box p="md">
@@ -357,11 +385,31 @@ export function OrdersDailyView() {
         dailySummaries.map((day) => {
           const lines = dailyLinesByDate[day.date] || [];
 
+          const totalPages = Math.max(
+            1,
+            Math.ceil(lines.length / PER_PAGE)
+          );
+          const currentPage = pageByDate[day.date] || 1;
+          const safePage =
+            currentPage > totalPages ? totalPages : currentPage;
+          const startIndex = (safePage - 1) * PER_PAGE;
+          const pageLines = lines.slice(
+            startIndex,
+            startIndex + PER_PAGE
+          );
+
           return (
             <Box key={day.date} mt="lg">
               <Group justify="space-between" mb="xs">
                 <Group gap="xs">
                   <Title order={3}>{day.date}</Title>
+                  {lines.length > 0 && (
+                    <Text size="xs" c="dimmed">
+                      Showing {startIndex + 1}–
+                      {Math.min(startIndex + PER_PAGE, lines.length)} of{" "}
+                      {lines.length} lines
+                    </Text>
+                  )}
                 </Group>
                 <Group gap="xs">
                   <Badge variant="light">
@@ -383,12 +431,13 @@ export function OrdersDailyView() {
                         <Table.Th>Set</Table.Th>
                         <Table.Th>Card</Table.Th>
                         <Table.Th>Qty</Table.Th>
+                        <Table.Th>Image</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
                       {lines.length === 0 && (
                         <Table.Tr>
-                          <Table.Td colSpan={5}>
+                          <Table.Td colSpan={6}>
                             <Text c="dimmed" size="sm">
                               No line items found for this day yet.
                             </Text>
@@ -396,30 +445,80 @@ export function OrdersDailyView() {
                         </Table.Tr>
                       )}
 
-                      {lines.map((line, idx) => (
-                        <Table.Tr
-                          key={`${line.bin}-${line.row}-${line.setCode || line.set_name}-${line.name}-${idx}`}
-                        >
-                          <Table.Td>
-                            <Text>{line.bin}</Text>
-                          </Table.Td>
-                          <Table.Td>
-                            <Text>{line.row ?? "-"}</Text>
-                          </Table.Td>
-                          <Table.Td>
-                            <Text>{line.setCode || line.set_name || "-"}</Text>
-                          </Table.Td>
-                          <Table.Td>
-                            <Text>{line.name}</Text>
-                          </Table.Td>
-                          <Table.Td>
-                            <Text>{line.quantity}</Text>
-                          </Table.Td>
-                        </Table.Tr>
-                      ))}
+                      {pageLines.map((line, idx) => {
+                        const rowKey = `${line.bin}-${line.row || 0}-${
+                          line.setCode || line.set_name || ""
+                        }-${line.name}-${idx}`;
+                        const isOpen = !!imageOpenByKey[rowKey];
+
+                        return (
+                          <Table.Tr key={rowKey}>
+                            <Table.Td>
+                              <Text>{line.bin}</Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text>{line.row ?? "-"}</Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text>
+                                {line.setCode || line.set_name || "-"}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text>{line.name}</Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text>{line.quantity}</Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Stack gap={4}>
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  onClick={() =>
+                                    toggleImageForKey(rowKey)
+                                  }
+                                >
+                                  {isOpen ? "Hide image" : "View image"}
+                                </Button>
+                                {isOpen && (
+                                  <Box mt={4}>
+                                    <Image
+                                      src={
+                                        line.image_url ||
+                                        "/card-placeholder.png"
+                                      }
+                                      alt={line.name}
+                                      fit="contain"
+                                      radius="md"
+                                      w={220} // 👈 make it big enough to actually see
+                                    />
+                                  </Box>
+                                )}
+                              </Stack>
+                            </Table.Td>
+                          </Table.Tr>
+                        );
+                      })}
                     </Table.Tbody>
                   </Table>
                 </ScrollArea>
+
+                {totalPages > 1 && (
+                  <Group justify="flex-end" mt="sm">
+                    <Pagination
+                      size="sm"
+                      value={safePage}
+                      total={totalPages}
+                      onChange={(page) =>
+                        setPageByDate((prev) => ({
+                          ...prev,
+                          [day.date]: page,
+                        }))
+                      }
+                    />
+                  </Group>
+                )}
               </Card>
             </Box>
           );

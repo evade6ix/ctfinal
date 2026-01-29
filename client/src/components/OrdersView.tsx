@@ -11,13 +11,12 @@ import {
   Table,
   Text,
   Title,
-  SegmentedControl,        // 👈 NEW
+  SegmentedControl,
 } from "@mantine/core";
 import { IconArrowsDownUp } from "@tabler/icons-react";
 
 // 👇 adjust the path if your file is in a different folder
 import { OrdersDailyView } from "./OrdersDailyView";
-
 
 type Buyer = {
   username?: string;
@@ -50,8 +49,8 @@ type OrderItem = {
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  image_url?: string;   // from /api/order-articles
-  imageUrl?: string;    // future /api/orders usage if we wire it
+  image_url?: string; // from /api/order-articles
+  imageUrl?: string; // future /api/orders usage if we wire it
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
@@ -66,9 +65,8 @@ export function OrdersView() {
     Record<string | number, OrderItem[]>
   >({});
 
-  // 👇 NEW: toggle between raw Orders list and Daily sales
+  // 👇 toggle between raw Orders list and Daily sales
   const [viewMode, setViewMode] = useState<"orders" | "daily">("orders");
-
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -83,7 +81,13 @@ export function OrdersView() {
       if (!res.ok) throw new Error("Failed to load orders");
 
       const data: OrderSummary[] = await res.json();
-      setOrders(data);
+
+      // ✅ Only keep HUB_PENDING (Zero) orders in this view
+      const zeroOrders = (data || []).filter(
+        (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
+      );
+
+      setOrders(zeroOrders);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to load orders");
@@ -233,18 +237,20 @@ export function OrdersView() {
     }
   };
 
-    return (
+  return (
     <Stack gap="md">
       <Group justify="space-between">
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-            CardTrader seller orders. Expand an order to view line items, or switch to Daily Sales.
+            CardTrader{" "}
+            <strong>HUB_PENDING (Zero)</strong> seller orders only. Expand an
+            order to view line items, or switch to Daily Sales.
           </Text>
         </div>
 
         <Group gap="xs">
-          {/* 👇 NEW: view mode toggle */}
+          {/* 👇 view mode toggle */}
           <SegmentedControl
             size="sm"
             value={viewMode}
@@ -272,7 +278,6 @@ export function OrdersView() {
         </Group>
       </Group>
 
-
       {error && (
         <Paper p="sm" withBorder>
           <Text c="red">{error}</Text>
@@ -285,13 +290,13 @@ export function OrdersView() {
         </Paper>
       )}
 
-           {syncError && (
+      {syncError && (
         <Paper p="sm" withBorder>
           <Text c="red">{syncError}</Text>
         </Paper>
       )}
 
-      {/* 👇 Orders list mode (what you already had) */}
+      {/* 👇 Orders list mode */}
       {viewMode === "orders" && (
         <Paper withBorder radius="md" p={0}>
           <ScrollArea h={500}>
@@ -312,7 +317,7 @@ export function OrdersView() {
                 {!loading && orders.length === 0 && (
                   <Table.Tr>
                     <Table.Td colSpan={7} ta="center">
-                      <Text c="dimmed">No orders found.</Text>
+                      <Text c="dimmed">No HUB_PENDING orders found.</Text>
                     </Table.Td>
                   </Table.Tr>
                 )}
@@ -342,7 +347,7 @@ export function OrdersView() {
                       <Table.Td>
                         <Badge
                           color={
-                            o.state === "paid"
+                            o.state?.toUpperCase() === "HUB_PENDING"
                               ? "yellow"
                               : o.state === "sent"
                               ? "green"

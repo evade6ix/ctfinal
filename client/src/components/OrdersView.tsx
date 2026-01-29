@@ -11,8 +11,13 @@ import {
   Table,
   Text,
   Title,
+  SegmentedControl,        // 👈 NEW
 } from "@mantine/core";
 import { IconArrowsDownUp } from "@tabler/icons-react";
+
+// 👇 adjust the path if your file is in a different folder
+import { OrdersDailyView } from "./OrdersDailyView";
+
 
 type Buyer = {
   username?: string;
@@ -60,6 +65,10 @@ export function OrdersView() {
   const [itemsByOrder, setItemsByOrder] = useState<
     Record<string | number, OrderItem[]>
   >({});
+
+  // 👇 NEW: toggle between raw Orders list and Daily sales
+  const [viewMode, setViewMode] = useState<"orders" | "daily">("orders");
+
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -224,17 +233,29 @@ export function OrdersView() {
     }
   };
 
-  return (
+    return (
     <Stack gap="md">
       <Group justify="space-between">
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-            CardTrader seller orders. Expand an order to view line items.
+            CardTrader seller orders. Expand an order to view line items, or switch to Daily Sales.
           </Text>
         </div>
 
         <Group gap="xs">
+          {/* 👇 NEW: view mode toggle */}
+          <SegmentedControl
+            size="sm"
+            value={viewMode}
+            onChange={(val) => setViewMode(val as "orders" | "daily")}
+            data={[
+              { label: "Orders", value: "orders" },
+              { label: "Daily sales", value: "daily" },
+            ]}
+          />
+
+          {/* Keep your existing buttons */}
           <Button onClick={fetchOrders} loading={loading} variant="light">
             Refresh
           </Button>
@@ -251,6 +272,7 @@ export function OrdersView() {
         </Group>
       </Group>
 
+
       {error && (
         <Paper p="sm" withBorder>
           <Text c="red">{error}</Text>
@@ -263,192 +285,197 @@ export function OrdersView() {
         </Paper>
       )}
 
-      {syncError && (
+           {syncError && (
         <Paper p="sm" withBorder>
           <Text c="red">{syncError}</Text>
         </Paper>
       )}
 
-      <Paper withBorder radius="md" p={0}>
-        <ScrollArea h={500}>
-          <Table withColumnBorders highlightOnHover striped withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Code</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th>Buyer</Table.Th>
-                <Table.Th>Items</Table.Th>
-                <Table.Th>Date</Table.Th>
-                <Table.Th>Total</Table.Th>
-                <Table.Th></Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-
-            <Table.Tbody>
-              {!loading && orders.length === 0 && (
+      {/* 👇 Orders list mode (what you already had) */}
+      {viewMode === "orders" && (
+        <Paper withBorder radius="md" p={0}>
+          <ScrollArea h={500}>
+            <Table withColumnBorders highlightOnHover striped withTableBorder>
+              <Table.Thead>
                 <Table.Tr>
-                  <Table.Td colSpan={7} ta="center">
-                    <Text c="dimmed">No orders found.</Text>
-                  </Table.Td>
+                  <Table.Th>Code</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Buyer</Table.Th>
+                  <Table.Th>Items</Table.Th>
+                  <Table.Th>Date</Table.Th>
+                  <Table.Th>Total</Table.Th>
+                  <Table.Th></Table.Th>
                 </Table.Tr>
-              )}
+              </Table.Thead>
 
-              {orders.map((o) => (
-                <>
-                  <Table.Tr
-                    key={o.id}
-                    onClick={() => toggle(o.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <Table.Td>
-                      <Group gap={6}>
-                        <Text fw={500}>{o.code}</Text>
-
-                        {o.allocated && (
-                          <Badge size="xs" color="yellow" variant="filled">
-                            Allocated
-                          </Badge>
-                        )}
-                      </Group>
-                      <Text size="xs" c="dimmed">
-                        as {o.orderAs}
-                      </Text>
-                    </Table.Td>
-
-                    <Table.Td>
-                      <Badge
-                        color={
-                          o.state === "paid"
-                            ? "yellow"
-                            : o.state === "sent"
-                            ? "green"
-                            : "gray"
-                        }
-                      >
-                        {o.state}
-                      </Badge>
-                    </Table.Td>
-
-                    <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
-                    <Table.Td>{o.size ?? "-"}</Table.Td>
-                    <Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
-                    <Table.Td>{formatTotal(o)}</Table.Td>
-
-                    <Table.Td>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggle(o.id);
-                        }}
-                      >
-                        View
-                      </Button>
+              <Table.Tbody>
+                {!loading && orders.length === 0 && (
+                  <Table.Tr>
+                    <Table.Td colSpan={7} ta="center">
+                      <Text c="dimmed">No orders found.</Text>
                     </Table.Td>
                   </Table.Tr>
+                )}
 
-                  {expanded === o.id && (
-                    <Table.Tr key={`${o.id}-expanded`}>
-                      <Table.Td
-                        colSpan={7}
-                        style={{
-                          background: "#111",
-                          padding: 0,
-                          borderTop: "2px solid #333",
-                        }}
-                      >
-                        <Box p="md">
-                          {!itemsByOrder[o.id] && (
-                            <Group justify="center" p="lg">
-                              <Loader size="sm" color="yellow" />
-                            </Group>
+                {orders.map((o) => (
+                  <>
+                    <Table.Tr
+                      key={o.id}
+                      onClick={() => toggle(o.id)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <Table.Td>
+                        <Group gap={6}>
+                          <Text fw={500}>{o.code}</Text>
+
+                          {o.allocated && (
+                            <Badge size="xs" color="yellow" variant="filled">
+                              Allocated
+                            </Badge>
                           )}
+                        </Group>
+                        <Text size="xs" c="dimmed">
+                          as {o.orderAs}
+                        </Text>
+                      </Table.Td>
 
-                          {itemsByOrder[o.id] &&
-                            itemsByOrder[o.id].length === 0 && (
-                              <Text c="dimmed" ta="center">
-                                No line items found.
-                              </Text>
-                            )}
+                      <Table.Td>
+                        <Badge
+                          color={
+                            o.state === "paid"
+                              ? "yellow"
+                              : o.state === "sent"
+                              ? "green"
+                              : "gray"
+                          }
+                        >
+                          {o.state}
+                        </Badge>
+                      </Table.Td>
 
-                          {itemsByOrder[o.id] &&
-                            itemsByOrder[o.id].length > 0 && (
-                              <Stack gap="md">
-                                {sortOrderItems(itemsByOrder[o.id]).map(
-                                  (it, idx) => (
-                                    <Group
-                                      key={idx}
-                                      align="flex-start"
-                                      wrap="nowrap"
-                                      style={{
-                                        padding: "8px 0",
-                                        borderBottom: "1px solid #333",
-                                      }}
-                                    >
-                                      {/* ⭐ Fixed image element ⭐ */}
-                                      <img
-                                        src={getCardImageSrc(it)}
-                                        width={50}
-                                        height={70}
-                                        style={{
-                                          objectFit: "cover",
-                                          borderRadius: 4,
-                                        }}
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).src =
-                                            "/card-placeholder.png";
-                                        }}
-                                      />
+                      <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
+                      <Table.Td>{o.size ?? "-"}</Table.Td>
+                      <Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
+                      <Table.Td>{formatTotal(o)}</Table.Td>
 
-                                      <Box style={{ flex: 1 }}>
-                                        <Text fw={500}>
-                                          {it.name || "No name"}
-                                        </Text>
-                                        <Text size="xs" c="dimmed">
-                                          {it.set_name || "Unknown set"}
-                                        </Text>
-
-                                        <Text size="sm" mt={4}>
-                                          Qty: {it.quantity ?? "?"}
-                                        </Text>
-
-                                        <Group gap={6} mt={6}>
-                                          {(it.binLocations || []).map(
-                                            (b, i) => (
-                                              <Badge key={i} color="yellow">
-                                                {b.bin ?? "?"} / Row{" "}
-                                                {b.row ?? "?"} (x
-                                                {b.quantity ?? "?"})
-                                              </Badge>
-                                            )
-                                          )}
-                                        </Group>
-                                      </Box>
-
-                                      <Button
-                                        color="yellow"
-                                        size="xs"
-                                        variant="filled"
-                                        disabled
-                                      >
-                                        Deduct
-                                      </Button>
-                                    </Group>
-                                  )
-                                )}
-                              </Stack>
-                            )}
-                        </Box>
+                      <Table.Td>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggle(o.id);
+                          }}
+                        >
+                          View
+                        </Button>
                       </Table.Td>
                     </Table.Tr>
-                  )}
-                </>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </ScrollArea>
-      </Paper>
+
+                    {expanded === o.id && (
+                      <Table.Tr key={`${o.id}-expanded`}>
+                        <Table.Td
+                          colSpan={7}
+                          style={{
+                            background: "#111",
+                            padding: 0,
+                            borderTop: "2px solid #333",
+                          }}
+                        >
+                          <Box p="md">
+                            {!itemsByOrder[o.id] && (
+                              <Group justify="center" p="lg">
+                                <Loader size="sm" color="yellow" />
+                              </Group>
+                            )}
+
+                            {itemsByOrder[o.id] &&
+                              itemsByOrder[o.id].length === 0 && (
+                                <Text c="dimmed" ta="center">
+                                  No line items found.
+                                </Text>
+                              )}
+
+                            {itemsByOrder[o.id] &&
+                              itemsByOrder[o.id].length > 0 && (
+                                <Stack gap="md">
+                                  {sortOrderItems(itemsByOrder[o.id]).map(
+                                    (it, idx) => (
+                                      <Group
+                                        key={idx}
+                                        align="flex-start"
+                                        wrap="nowrap"
+                                        style={{
+                                          padding: "8px 0",
+                                          borderBottom: "1px solid #333",
+                                        }}
+                                      >
+                                        <img
+                                          src={getCardImageSrc(it)}
+                                          width={50}
+                                          height={70}
+                                          style={{
+                                            objectFit: "cover",
+                                            borderRadius: 4,
+                                          }}
+                                          onError={(e) => {
+                                            (e.target as HTMLImageElement).src =
+                                              "/card-placeholder.png";
+                                          }}
+                                        />
+
+                                        <Box style={{ flex: 1 }}>
+                                          <Text fw={500}>
+                                            {it.name || "No name"}
+                                          </Text>
+                                          <Text size="xs" c="dimmed">
+                                            {it.set_name || "Unknown set"}
+                                          </Text>
+
+                                          <Text size="sm" mt={4}>
+                                            Qty: {it.quantity ?? "?"}
+                                          </Text>
+
+                                          <Group gap={6} mt={6}>
+                                            {(it.binLocations || []).map(
+                                              (b, i) => (
+                                                <Badge key={i} color="yellow">
+                                                  {b.bin ?? "?"} / Row{" "}
+                                                  {b.row ?? "?"} (x
+                                                  {b.quantity ?? "?"})
+                                                </Badge>
+                                              )
+                                            )}
+                                          </Group>
+                                        </Box>
+
+                                        <Button
+                                          color="yellow"
+                                          size="xs"
+                                          variant="filled"
+                                          disabled
+                                        >
+                                          Deduct
+                                        </Button>
+                                      </Group>
+                                    )
+                                  )}
+                                </Stack>
+                              )}
+                          </Box>
+                        </Table.Td>
+                      </Table.Tr>
+                    )}
+                  </>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Paper>
+      )}
+
+      {/* 👇 Daily sales mode */}
+      {viewMode === "daily" && <OrdersDailyView />}
     </Stack>
   );
 }

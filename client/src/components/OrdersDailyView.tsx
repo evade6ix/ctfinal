@@ -137,9 +137,9 @@ export function OrdersDailyView() {
 
   // 2) Build per-day header stats (order count + total C$)
   useEffect(() => {
-    // Only use Zero / hub_pending orders
+    // Only use Zero / hub_pending status
     const zeroOrders = orders.filter(
-      (o) => o.orderAs === "hub_pending"
+      (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
     );
 
     if (!zeroOrders.length) {
@@ -196,11 +196,11 @@ export function OrdersDailyView() {
     setDailySummaries(result);
   }, [orders]);
 
-  // 3) For each Zero order, fetch /api/order-articles/:id and aggregate per day
+  // 3) For each hub_pending order, fetch /api/order-articles/:id and aggregate per day
   useEffect(() => {
     async function buildDailyLines() {
       const zeroOrders = orders.filter(
-        (o) => o.orderAs === "hub_pending"
+        (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
       );
 
       if (!zeroOrders.length) {
@@ -308,9 +308,9 @@ export function OrdersDailyView() {
     <Box p="md">
       <Group justify="space-between" mb="md" align="flex-start">
         <div>
-          <Title order={2}>Daily Sales (Zero / hub_pending)</Title>
+          <Title order={2}>Daily Sales (Zero / HUB_PENDING)</Title>
           <Text c="dimmed" size="sm">
-            Only CardTrader <strong>hub_pending</strong> (Zero) orders,
+            Only CardTrader <strong>HUB_PENDING</strong> (Zero) orders,
             grouped by Toronto calendar day, with a bin / row / set / card
             picking list so you can pull cards every day instead of once per week.
           </Text>
@@ -339,7 +339,7 @@ export function OrdersDailyView() {
 
       {!loading && !error && dailySummaries.length === 0 && (
         <Text c="dimmed" mt="md">
-          No <strong>hub_pending</strong> orders found.
+          No <strong>HUB_PENDING</strong> orders found.
         </Text>
       )}
 

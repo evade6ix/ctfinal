@@ -41,11 +41,14 @@ async function fetchAllProducts(client) {
 function mapProductToInventoryFields(prod) {
   const properties = prod.properties_hash || {};
 
+  // 👇 NEW: mtg_color(s) from CardTrader properties
+  const mtgColors = properties.mtg_card_colors || null; // e.g. "G", "UR", "WUBRG"
+
   const cardTraderId = prod.id; // listing/article ID
   const name = prod.name_en || "";
   const quantity = prod.quantity ?? 0;
 
-  // ✅ NEW: capture blueprint_id so we can backfill setCode later
+  // ✅ capture blueprint_id so we can backfill setCode later
   const blueprintId =
     typeof prod.blueprint_id !== "undefined" ? prod.blueprint_id : null;
 
@@ -88,7 +91,8 @@ function mapProductToInventoryFields(prod) {
     condition,
     isFoil,
     price,
-    quantity
+    quantity,
+    mtgColors        // 👈 NEW: pass through
   };
 }
 
@@ -118,20 +122,28 @@ async function main() {
       continue; // skip if we couldn't find an ID
     }
 
+    // Build the update doc. We DO NOT touch locations/notes here.
+    const updateDoc = {
+      cardTraderId: mapped.cardTraderId,
+      blueprintId: mapped.blueprintId,   // ✅ save blueprintId
+      name: mapped.name,
+      setCode: mapped.setCode,
+      game: mapped.game,
+      condition: mapped.condition,
+      isFoil: mapped.isFoil,
+      price: mapped.price,
+      totalQuantity: mapped.quantity
+      // locations/notes stay as-is; not touched here
+    };
+
+    // Only set mtgColors if we actually have a value
+    if (mapped.mtgColors != null) {
+      updateDoc.mtgColors = mapped.mtgColors;
+    }
+
     await InventoryItem.findOneAndUpdate(
       { cardTraderId: mapped.cardTraderId },
-      {
-        cardTraderId: mapped.cardTraderId,
-        blueprintId: mapped.blueprintId,   // ✅ save blueprintId
-        name: mapped.name,
-        setCode: mapped.setCode,
-        game: mapped.game,
-        condition: mapped.condition,
-        isFoil: mapped.isFoil,
-        price: mapped.price,
-        totalQuantity: mapped.quantity
-        // locations/notes stay as-is; not touched here
-      },
+      updateDoc,
       { upsert: true, new: true }
     );
 

@@ -42,6 +42,9 @@ const inventoryItemSchema = new mongoose.Schema(
     isFoil: { type: Boolean, default: false },
     price: { type: Number },
 
+    // MTG-specific metadata
+    mtgColors: { type: String, index: true },    // 👈 NEW FIELD FOR COLORS, e.g. "G", "UR"
+
     // Quantity & locations
     totalQuantity: { type: Number, required: true, min: 0 },
     locations: {

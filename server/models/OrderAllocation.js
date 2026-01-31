@@ -1,3 +1,4 @@
+// server/models/OrderAllocation.js
 import mongoose from "mongoose";
 
 const pickedLocationSchema = new mongoose.Schema(
@@ -67,6 +68,19 @@ const orderAllocationSchema = new mongoose.Schema(
     pickedLocations: {
       type: [pickedLocationSchema],
       default: [],
+    },
+
+    // 🔽🔽 NEW: UI “picked” toggle for that line 🔽🔽
+    picked: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    pickedAt: {
+      type: Date,
+    },
+    pickedBy: {
+      type: String,
     },
   },
   { timestamps: true }

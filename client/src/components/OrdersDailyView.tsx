@@ -150,9 +150,6 @@ export function OrdersDailyView() {
   // which row is currently loading a Scryfall image
   const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
 
-  // bump this to rebuild /order-articles aggregation after we pick/unpick
-  const [refreshVersion, setRefreshVersion] = useState(0);
-
   // 1) Fetch all orders from /api/orders (same as OrdersView)
   useEffect(() => {
     async function fetchOrders() {
@@ -370,7 +367,7 @@ export function OrdersDailyView() {
     }
 
     buildDailyLines();
-  }, [orders, refreshVersion]);
+  }, [orders]);
 
   const toggleImageForKey = (key: string) => {
     setImageOpenByKey((prev) => ({
@@ -430,7 +427,7 @@ export function OrdersDailyView() {
     }
   };
 
-  // bulk pick/unpick for a single aggregated line
+  // bulk pick/unpick for a single aggregated line (no re-aggregation)
   const handleTogglePickedLine = async (line: DailyLine) => {
     const validAllocs = line.allocations.filter(
       (a) => typeof a.cardTraderId === "number"
@@ -469,8 +466,31 @@ export function OrdersDailyView() {
         )
       );
 
-      // 🔁 rebuild daily lines from fresh /order-articles data (still with skipImages=1)
-      setRefreshVersion((v) => v + 1);
+      // 🎯 NO FULL REBUILD: just update this line locally
+      setDailyLinesByDate((prev) => {
+        const dayLines = prev[line.date];
+        if (!dayLines) return prev;
+
+        const updatedDayLines = dayLines.map((l) => {
+          if (l.groupKey !== line.groupKey) return l;
+
+          const newPickedCount = allPicked ? 0 : l.totalAllocations;
+
+          return {
+            ...l,
+            pickedAllocations: newPickedCount,
+            allocations: l.allocations.map((a) => ({
+              ...a,
+              picked: !allPicked, // all picked or all unpicked
+            })),
+          };
+        });
+
+        return {
+          ...prev,
+          [line.date]: updatedDayLines,
+        };
+      });
     } finally {
       setTogglingKey(null);
     }
@@ -647,11 +667,9 @@ export function OrdersDailyView() {
                                   variant="light"
                                   loading={imageLoadingKey === rowKey}
                                   onClick={async () => {
-                                    // first time → fetch from Scryfall via backend
                                     if (!line.image_url) {
                                       await handleShowImageForLine(line);
                                     }
-                                    // toggle visibility either way
                                     toggleImageForKey(rowKey);
                                   }}
                                 >

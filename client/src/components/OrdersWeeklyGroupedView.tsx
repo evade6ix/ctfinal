@@ -44,6 +44,8 @@ type OrderItem = {
   pickedBy?: string | null;
 };
 
+type FilterMode = "all" | "picked" | "unpicked";
+
 export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,6 +62,9 @@ export function OrdersWeeklyGroupedView() {
 
   // Which line is currently being updated (for a tiny loading state)
   const [pickingKey, setPickingKey] = useState<string | null>(null);
+
+  // Global filter for picked / unpicked / all
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
 
   // ───────────────────────────────────────────────
   // Initial weekly summaries
@@ -157,6 +162,17 @@ export function OrdersWeeklyGroupedView() {
 
     // FINAL fallback – local placeholder
     return "/card-placeholder.png";
+  };
+
+  // Small helper to apply picked/unpicked filter
+  const filterItems = (items: OrderItem[], mode: FilterMode): OrderItem[] => {
+    if (mode === "picked") {
+      return items.filter((it) => !!it.picked);
+    }
+    if (mode === "unpicked") {
+      return items.filter((it) => !it.picked);
+    }
+    return items;
   };
 
   // Load items for a single order from /api/order-articles/:id
@@ -365,6 +381,36 @@ export function OrdersWeeklyGroupedView() {
         lines are stored in Mongo and shared with your other views.
       </Text>
 
+      {/* Global picked/unpicked filter */}
+      <Group gap="xs">
+        <Text size="xs" c="dimmed">
+          Filter lines:
+        </Text>
+        <Button
+          size="xs"
+          variant={filterMode === "all" ? "filled" : "subtle"}
+          onClick={() => setFilterMode("all")}
+        >
+          All
+        </Button>
+        <Button
+          size="xs"
+          variant={filterMode === "unpicked" ? "filled" : "subtle"}
+          color="yellow"
+          onClick={() => setFilterMode("unpicked")}
+        >
+          Unpicked
+        </Button>
+        <Button
+          size="xs"
+          variant={filterMode === "picked" ? "filled" : "subtle"}
+          color="green"
+          onClick={() => setFilterMode("picked")}
+        >
+          Picked
+        </Button>
+      </Group>
+
       {loading && (
         <Group justify="center" mt="xl">
           <Loader size="lg" />
@@ -496,7 +542,7 @@ export function OrdersWeeklyGroupedView() {
                                   </Group>
                                 )}
 
-                                {/* No line items */}
+                                {/* No line items at all */}
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length === 0 &&
                                   !loadingItems && (
@@ -505,102 +551,141 @@ export function OrdersWeeklyGroupedView() {
                                     </Text>
                                   )}
 
-                                {/* Line items – all at once, images on demand */}
+                                {/* Line items – apply picked/unpicked filter */}
                                 {itemsByOrder[o.id] &&
-                                  itemsByOrder[o.id].length > 0 && (
-                                    <Stack gap="md">
-                                      {itemsByOrder[o.id].map((it, idx) => {
-                                        const isPicked = !!it.picked;
-                                        const key = `${o.id}-${it.cardTraderId}`;
-                                        const isBusy = pickingKey === key;
+                                  itemsByOrder[o.id].length > 0 && (() => {
+                                    const allItems = itemsByOrder[o.id]!;
+                                    const visibleItems = filterItems(
+                                      allItems,
+                                      filterMode
+                                    );
 
-                                        return (
-                                          <Group
-                                            key={idx}
-                                            align="flex-start"
-                                            wrap="nowrap"
-                                            style={{
-                                              padding: "8px 12px",
-                                              borderBottom:
-                                                "1px solid #333",
-                                              background: isPicked
-                                                ? "rgba(46, 204, 113, 0.12)" // soft green
-                                                : "transparent",
-                                              borderLeft: isPicked
-                                                ? "3px solid #2ecc71"
-                                                : "3px solid transparent",
-                                              borderRadius: 4,
-                                            }}
-                                          >
-                                            {/* IMAGE + BUTTON */}
-                                            <Box
+                                    if (
+                                      visibleItems.length === 0 &&
+                                      !loadingItems
+                                    ) {
+                                      return (
+                                        <Text c="dimmed" ta="center">
+                                          No line items match the current
+                                          filter.
+                                        </Text>
+                                      );
+                                    }
+
+                                    return (
+                                      <Stack gap="md">
+                                        {visibleItems.map((it) => {
+                                          const isPicked = !!it.picked;
+                                          const key = `${o.id}-${it.cardTraderId}`;
+                                          const isBusy =
+                                            pickingKey === key;
+
+                                          // Map back to original index so
+                                          // "Mark up to here" works even
+                                          // when filtered.
+                                          const originalIndex =
+                                            allItems.indexOf(it);
+
+                                          return (
+                                            <Group
+                                              key={key}
+                                              align="flex-start"
+                                              wrap="nowrap"
                                               style={{
-                                                display: "flex",
-                                                flexDirection: "column",
-                                                alignItems: "center",
-                                                marginRight: 16,
+                                                padding: "8px 12px",
+                                                borderBottom:
+                                                  "1px solid #333",
+                                                background: isPicked
+                                                  ? "rgba(46, 204, 113, 0.12)" // soft green
+                                                  : "transparent",
+                                                borderLeft: isPicked
+                                                  ? "3px solid #2ecc71"
+                                                  : "3px solid transparent",
+                                                borderRadius: 4,
                                               }}
                                             >
-                                              <img
-                                                src={getCardImageSrc(it)}
-                                                width={140}
-                                                height={196}
+                                              {/* IMAGE + BUTTON */}
+                                              <Box
                                                 style={{
-                                                  objectFit: "cover",
-                                                  borderRadius: 6,
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  alignItems: "center",
+                                                  marginRight: 16,
                                                 }}
-                                                loading="lazy"
-                                                decoding="async"
-                                                onError={(e) => {
-                                                  (
-                                                    e.target as HTMLImageElement
-                                                  ).src = "/card-placeholder.png";
+                                              >
+                                                <img
+                                                  src={getCardImageSrc(it)}
+                                                  width={140}
+                                                  height={196}
+                                                  style={{
+                                                    objectFit: "cover",
+                                                    borderRadius: 6,
+                                                  }}
+                                                  loading="lazy"
+                                                  decoding="async"
+                                                  onError={(e) => {
+                                                    (
+                                                      e.target as HTMLImageElement
+                                                    ).src =
+                                                      "/card-placeholder.png";
+                                                  }}
+                                                  alt={
+                                                    it.name || "Card image"
+                                                  }
+                                                />
+                                                <Button
+                                                  mt={6}
+                                                  size="xs"
+                                                  variant="subtle"
+                                                  onClick={() =>
+                                                    handleShowImage(
+                                                      o.id,
+                                                      originalIndex,
+                                                      it
+                                                    )
+                                                  }
+                                                >
+                                                  Show image
+                                                </Button>
+                                              </Box>
+
+                                              {/* DETAILS + PICKED BUTTON */}
+                                              <Box
+                                                style={{
+                                                  flex: 1,
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  gap: 6,
                                                 }}
-                                                alt={it.name || "Card image"}
-                                              />
-                                              <Button
-                                                mt={6}
-                                                size="xs"
-                                                variant="subtle"
-                                                onClick={() =>
-                                                  handleShowImage(o.id, idx, it)
-                                                }
                                               >
-                                                Show image
-                                              </Button>
-                                            </Box>
+                                                <Group
+                                                  justify="space-between"
+                                                  align="flex-start"
+                                                  wrap="nowrap"
+                                                >
+                                                  <Box style={{ flex: 1 }}>
+                                                    <Text fw={500}>
+                                                      {it.name || "No name"}
+                                                    </Text>
+                                                    <Text
+                                                      size="xs"
+                                                      c="dimmed"
+                                                    >
+                                                      {it.set_name ||
+                                                        "Unknown set"}
+                                                    </Text>
 
-                                            {/* DETAILS + PICKED BUTTON */}
-                                            <Box
-                                              style={{
-                                                flex: 1,
-                                                display: "flex",
-                                                flexDirection: "column",
-                                                gap: 6,
-                                              }}
-                                            >
-                                              <Group
-                                                justify="space-between"
-                                                align="flex-start"
-                                                wrap="nowrap"
-                                              >
-                                                <Box style={{ flex: 1 }}>
-                                                  <Text fw={500}>
-                                                    {it.name || "No name"}
-                                                  </Text>
-                                                  <Text size="xs" c="dimmed">
-                                                    {it.set_name ||
-                                                      "Unknown set"}
-                                                  </Text>
+                                                    <Text size="sm" mt={4}>
+                                                      Qty:{" "}
+                                                      {it.quantity ?? "?"}
+                                                    </Text>
 
-                                                  <Text size="sm" mt={4}>
-                                                    Qty: {it.quantity ?? "?"}
-                                                  </Text>
-
-                                                  {/* BIN LOCATIONS */}
-                                                  <Group gap={6} mt={6}>
-                                                    {(it.binLocations || []).map(
-                                                      (b, i) => (
+                                                    {/* BIN LOCATIONS */}
+                                                    <Group gap={6} mt={6}>
+                                                      {(
+                                                        it.binLocations ||
+                                                        []
+                                                      ).map((b, i) => (
                                                         <Badge
                                                           key={i}
                                                           color="yellow"
@@ -609,75 +694,75 @@ export function OrdersWeeklyGroupedView() {
                                                           {b.row ?? "?"} (x
                                                           {b.quantity ?? "?"})
                                                         </Badge>
-                                                      )
-                                                    )}
-                                                  </Group>
-                                                </Box>
+                                                      ))}
+                                                    </Group>
+                                                  </Box>
 
+                                                  <Group
+                                                    gap="xs"
+                                                    justify="flex-end"
+                                                    align="center"
+                                                    style={{ flexShrink: 0 }}
+                                                  >
+                                                    <Button
+                                                      size="xs"
+                                                      variant={
+                                                        isPicked
+                                                          ? "filled"
+                                                          : "outline"
+                                                      }
+                                                      color={
+                                                        isPicked
+                                                          ? "green"
+                                                          : "gray"
+                                                      }
+                                                      loading={isBusy}
+                                                      disabled={isBusy}
+                                                      onClick={() =>
+                                                        isPicked
+                                                          ? persistUnpick(
+                                                              o.id,
+                                                              it
+                                                            )
+                                                          : persistPick(
+                                                              o.id,
+                                                              it
+                                                            )
+                                                      }
+                                                    >
+                                                      {isPicked
+                                                        ? "Picked"
+                                                        : "Mark picked"}
+                                                    </Button>
+                                                  </Group>
+                                                </Group>
+
+                                                {/* Mark up to here (uses original index) */}
                                                 <Group
-                                                  gap="xs"
                                                   justify="flex-end"
-                                                  align="center"
-                                                  style={{ flexShrink: 0 }}
+                                                  mt={4}
                                                 >
                                                   <Button
                                                     size="xs"
-                                                    variant={
-                                                      isPicked
-                                                        ? "filled"
-                                                        : "outline"
-                                                    }
-                                                    color={
-                                                      isPicked
-                                                        ? "green"
-                                                        : "gray"
-                                                    }
-                                                    loading={isBusy}
-                                                    disabled={isBusy}
+                                                    variant="subtle"
+                                                    color="green"
                                                     onClick={() =>
-                                                      isPicked
-                                                        ? persistUnpick(
-                                                            o.id,
-                                                            it
-                                                          )
-                                                        : persistPick(
-                                                            o.id,
-                                                            it
-                                                          )
+                                                      handleMarkFulfilledUpTo(
+                                                        o.id,
+                                                        originalIndex
+                                                      )
                                                     }
                                                   >
-                                                    {isPicked
-                                                      ? "Picked"
-                                                      : "Mark picked"}
+                                                    Mark up to here
                                                   </Button>
                                                 </Group>
-                                              </Group>
-
-                                              {/* Mark up to here */}
-                                              <Group
-                                                justify="flex-end"
-                                                mt={4}
-                                              >
-                                                <Button
-                                                  size="xs"
-                                                  variant="subtle"
-                                                  color="green"
-                                                  onClick={() =>
-                                                    handleMarkFulfilledUpTo(
-                                                      o.id,
-                                                      idx
-                                                    )
-                                                  }
-                                                >
-                                                  Mark up to here
-                                                </Button>
-                                              </Group>
-                                            </Box>
-                                          </Group>
-                                        );
-                                      })}
-                                    </Stack>
-                                  )}
+                                              </Box>
+                                            </Group>
+                                          );
+                                        })}
+                                      </Stack>
+                                    );
+                                  })()}
                               </Box>
                             </Table.Td>
                           </Table.Tr>

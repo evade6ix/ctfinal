@@ -1,67 +1,79 @@
-// server/models/OrderAllocation.js
 import mongoose from "mongoose";
+
+const pickedLocationSchema = new mongoose.Schema(
+  {
+    bin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Bin",
+      required: true,
+    },
+    row: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 5,
+    },
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+  },
+  { _id: false }
+);
 
 const orderAllocationSchema = new mongoose.Schema(
   {
-    // CardTrader order id (we store as string for consistency)
+    // CardTrader order id (numeric) – we store as string to be safe
     orderId: {
       type: String,
       required: true,
       index: true,
     },
 
-    // CardTrader product id for this line
+    // Optional: CT order code like "20260123XXXX"
+    orderCode: {
+      type: String,
+    },
+
+    // Which listing this allocation is for
     cardTraderId: {
       type: Number,
       required: true,
       index: true,
     },
 
-    // Optional extras (keep these flexible so we don't break anything):
-    blueprintId: {
-      type: Number,
-    },
-    name: {
-      type: String,
-    },
-
-    // How many copies this allocation represents
-    quantity: {
+    // How many the order line requested in total
+    requestedQuantity: {
       type: Number,
       required: true,
+      min: 1,
     },
 
-    // Bin + row we’re pulling from
-    bin: {
-      type: String,
-    },
-    row: {
+    // How many we actually fulfilled from bins
+    fulfilledQuantity: {
       type: Number,
+      required: true,
+      min: 0,
     },
 
-    // Picking state
-    picked: {
-      type: Boolean,
-      default: false,
-      index: true,
+    // If > 0, we didn’t have enough stock in bins
+    unfilled: {
+      type: Number,
+      default: 0,
     },
-    pickedAt: {
-      type: Date,
-    },
-    pickedBy: {
-      type: String,
+
+    // Exactly which bins/rows we pulled from
+    pickedLocations: {
+      type: [pickedLocationSchema],
+      default: [],
     },
   },
-  {
-    timestamps: true,
-    // Allow extra fields just in case your existing allocations
-    // already have other properties we’re not explicitly modeling.
-    strict: false,
-  }
+  { timestamps: true }
 );
 
-// Useful index when we look up a line for a specific order + CT product
-orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 });
+// One allocation per order + cardTraderId
+orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 }, { unique: true });
 
 export const OrderAllocation = mongoose.model(
   "OrderAllocation",

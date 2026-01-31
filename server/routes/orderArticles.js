@@ -129,14 +129,19 @@ router.get("/image", async (req, res) => {
  * Returns normalized line items for an order, including:
  * - cardTraderId / blueprintId
  * - quantity
- * - Scryfall image_url
  * - binLocations (from allocations / live allocation)
+ *
+ * 🛑 IMPORTANT:
+ * We DO NOT call Scryfall here anymore.
+ * This endpoint is for data + bins only.
+ * Scryfall is only used via /api/order-articles/image when you click "view image".
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const orderIdStr = String(id);
 
-  const skipImages = req.query.skipImages === "1";
+  // Force Scryfall off for this endpoint – we only want it on explicit image calls.
+  const skipImages = true;
   const debug = req.query.debug === "1";
 
   try {
@@ -170,7 +175,7 @@ router.get("/:id", async (req, res) => {
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
       set_name: a.expansion || null,
-      image_url: null, // will be filled with Scryfall
+      image_url: null, // we are NOT filling this from Scryfall here
       binLocations: [],
     }));
 
@@ -181,19 +186,13 @@ router.get("/:id", async (req, res) => {
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // Edge case: if we truly have NO CT IDs, we can *only* do Scryfall images,
-    // and we can't allocate bins anyway.
+    // Edge case: if we truly have NO CT IDs, we can't allocate bins anyway.
     if (!ctIds.length) {
-      // per-request context for Scryfall limits
-      const ctx = { lookups: 0 };
-
-      const finalNoCT = await Promise.all(
-        baseItems.map(async (it) => ({
-          ...it,
-          image_url: skipImages ? null : await getScryfallImageLimited(it.name, ctx),
-          binLocations: [],
-        }))
-      );
+      const finalNoCT = baseItems.map((it) => ({
+        ...it,
+        image_url: null, // no Scryfall here
+        binLocations: [],
+      }));
       return res.json(finalNoCT);
     }
 
@@ -222,10 +221,10 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 🔁 Per-request Scryfall context (resets on each order call)
+    // ctx exists but we are not using Scryfall in this route anymore
     const ctx = { lookups: 0 };
 
-    // 7️⃣ Build final lines (Scryfall images + bins)
+    // 7️⃣ Build final lines (bins + allocations, NO Scryfall)
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
@@ -241,11 +240,8 @@ router.get("/:id", async (req, res) => {
             ? invItem.blueprintId
             : it.cardTraderId ?? null;
 
-        // 💥 IMAGE LOGIC — Scryfall ONLY, but capped + cached 💥
-        let image_url = null;
-        if (!skipImages) {
-          image_url = await getScryfallImageLimited(it.name, ctx);
-        }
+        // 🚫 No Scryfall image here
+        const image_url = null;
 
         //
         // 🧱 VALIDATE ITEM

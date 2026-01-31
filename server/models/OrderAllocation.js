@@ -1,81 +1,98 @@
-import mongoose from "mongoose";
+// server/routes/orderAllocations.js
+import express from "express";
+import { OrderAllocation } from "../models/OrderAllocation.js";
 
-const pickedLocationSchema = new mongoose.Schema(
-  {
-    bin: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Bin",
-      required: true,
-    },
-    row: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 5,
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      min: 1,
-    },
-  },
-  { _id: false }
-);
+const router = express.Router();
 
-const orderAllocationSchema = new mongoose.Schema(
-  {
-    // CardTrader order id (numeric) – we store as string to be safe
-    orderId: {
-      type: String,
-      required: true,
-      index: true,
-    },
+/**
+ * PATCH /api/order-allocations/pick
+ * Body: { orderId: string | number, cardTraderId: number, pickedBy?: string }
+ *
+ * Marks THIS allocation as picked (does NOT touch inventory at all).
+ */
+router.patch("/pick", async (req, res) => {
+  try {
+    const { orderId, cardTraderId, pickedBy } = req.body || {};
 
-    // Optional: CT order code like "20260123XXXX"
-    orderCode: {
-      type: String,
-    },
+    if (!orderId || typeof cardTraderId === "undefined") {
+      return res
+        .status(400)
+        .json({ error: "orderId and cardTraderId are required" });
+    }
 
-    // Which listing this allocation is for
-    cardTraderId: {
-      type: Number,
-      required: true,
-      index: true,
-    },
+    const filter = {
+      orderId: String(orderId),
+      cardTraderId: Number(cardTraderId),
+    };
 
-    // How many the order line requested in total
-    requestedQuantity: {
-      type: Number,
-      required: true,
-      min: 1,
-    },
+    const update = {
+      picked: true,
+      pickedAt: new Date(),
+    };
 
-    // How many we actually fulfilled from bins
-    fulfilledQuantity: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+    if (pickedBy && typeof pickedBy === "string") {
+      update.pickedBy = pickedBy;
+    }
 
-    // If > 0, we didn’t have enough stock in bins
-    unfilled: {
-      type: Number,
-      default: 0,
-    },
+    const doc = await OrderAllocation.findOneAndUpdate(filter, update, {
+      new: true,
+    });
 
-    // Exactly which bins/rows we pulled from
-    pickedLocations: {
-      type: [pickedLocationSchema],
-      default: [],
-    },
-  },
-  { timestamps: true }
-);
+    if (!doc) {
+      return res.status(404).json({
+        error: "Allocation not found for given orderId + cardTraderId",
+      });
+    }
 
-// One allocation per order + cardTraderId
-orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 }, { unique: true });
+    res.json(doc);
+  } catch (err) {
+    console.error("❌ Error in PATCH /api/order-allocations/pick:", err);
+    res.status(500).json({ error: "Failed to mark allocation as picked" });
+  }
+});
 
-export const OrderAllocation = mongoose.model(
-  "OrderAllocation",
-  orderAllocationSchema
-);
+/**
+ * PATCH /api/order-allocations/unpick
+ * Body: { orderId: string | number, cardTraderId: number }
+ *
+ * Clears picked state (still no inventory changes).
+ */
+router.patch("/unpick", async (req, res) => {
+  try {
+    const { orderId, cardTraderId } = req.body || {};
+
+    if (!orderId || typeof cardTraderId === "undefined") {
+      return res
+        .status(400)
+        .json({ error: "orderId and cardTraderId are required" });
+    }
+
+    const filter = {
+      orderId: String(orderId),
+      cardTraderId: Number(cardTraderId),
+    };
+
+    const update = {
+      picked: false,
+      pickedAt: null,
+      pickedBy: null,
+    };
+
+    const doc = await OrderAllocation.findOneAndUpdate(filter, update, {
+      new: true,
+    });
+
+    if (!doc) {
+      return res.status(404).json({
+        error: "Allocation not found for given orderId + cardTraderId",
+      });
+    }
+
+    res.json(doc);
+  } catch (err) {
+    console.error("❌ Error in PATCH /api/order-allocations/unpick:", err);
+    res.status(500).json({ error: "Failed to clear picked state" });
+  }
+});
+
+export default router;

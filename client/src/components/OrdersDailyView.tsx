@@ -28,14 +28,6 @@ type OrderSummary = {
   sellerTotalCurrency?: string | null;
 };
 
-type DailySummary = {
-  date: string; // "YYYY-MM-DD"
-  totalOrders: number;
-  totalValueCents: number;
-  totalValue: string;
-  orders: OrderSummary[];
-};
-
 // Line item coming back from /api/order-articles/:id
 type OrderItem = {
   id?: number;
@@ -44,18 +36,28 @@ type OrderItem = {
   name?: string;
   quantity?: number;
   set_name?: string; // e.g. "Ikoria: Lair of Behemoths"
-  setCode?: string; // if you ever add this later
+  setCode?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
-  image_url?: string; // 👈 carry through from backend like grouped view
+  image_url?: string;
+  picked?: boolean; // 👈 populated by backend when allocation is picked
+};
 
-  // NEW: same picked fields we added in weekly view
-  picked?: boolean;
-  pickedAt?: string | null;
-  pickedBy?: string | null;
+type DailySummary = {
+  date: string; // "YYYY-MM-DD"
+  totalOrders: number;
+  totalValueCents: number;
+  totalValue: string;
+  orders: OrderSummary[];
+};
+
+type DailyAllocationRef = {
+  orderId: number | string;
+  cardTraderId: number;
 };
 
 // Aggregated daily picking line
 type DailyLine = {
+  key: string; // stable key: bin|row|set|name
   date: string;
   name: string;
   set_name?: string;
@@ -63,12 +65,10 @@ type DailyLine = {
   bin: string;
   row?: number;
   quantity: number;
-  image_url?: string; // 👈 add image_url to the aggregated line
+  image_url?: string;
 
-  // NEW: aggregated picked state
-  picked?: boolean;      // true if this bin/row/set/card is fully picked
-  pickedCount?: number;  // total qty already picked across all orders
-  unpickedCount?: number; // total qty not picked yet
+  pickedCount: number; // how many of quantity are picked
+  allocations: DailyAllocationRef[]; // all (orderId, cardTraderId) combos behind this line
 };
 
 const API_BASE = "/api";
@@ -86,28 +86,24 @@ function getTorontoDateKey(iso?: string | null): string | null {
 // 👉 Sorting helper: Bin → Row → Set → Card name
 function sortDailyLines(lines: DailyLine[]): DailyLine[] {
   return [...lines].sort((a, b) => {
-    // 1) Bin (string, numeric-aware)
     const aBin = (a.bin || "").toString();
     const bBin = (b.bin || "").toString();
     if (aBin !== bBin) {
       return aBin.localeCompare(bBin, undefined, { numeric: true });
     }
 
-    // 2) Row (ascending; unassigned rows at bottom)
     const aRow = a.row ?? Number.MAX_SAFE_INTEGER;
     const bRow = b.row ?? Number.MAX_SAFE_INTEGER;
     if (aRow !== bRow) {
       return aRow - bRow;
     }
 
-    // 3) Set (prefer setCode, fallback to set_name)
     const aSet = (a.setCode || a.set_name || "").toString().toLowerCase();
     const bSet = (b.setCode || b.set_name || "").toString().toLowerCase();
     if (aSet !== bSet) {
       return aSet.localeCompare(bSet, undefined, { numeric: true });
     }
 
-    // 4) Card name A–Z
     const aName = (a.name || "").toString().toLowerCase();
     const bName = (b.name || "").toString().toLowerCase();
     return aName.localeCompare(bName, undefined, { numeric: true });
@@ -134,6 +130,9 @@ export function OrdersDailyView() {
   const [imageOpenByKey, setImageOpenByKey] = useState<
     Record<string, boolean>
   >({});
+
+  // which daily line is currently being marked picked
+  const [pickingKey, setPickingKey] = useState<string | null>(null);
 
   // 1) Fetch all orders from /api/orders (same as OrdersView)
   useEffect(() => {
@@ -162,7 +161,6 @@ export function OrdersDailyView() {
 
   // 2) Build per-day header stats (order count + total C$)
   useEffect(() => {
-    // Only use Zero / hub_pending status
     const zeroOrders = orders.filter(
       (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
     );
@@ -181,7 +179,6 @@ export function OrdersDailyView() {
       const dateKey = getTorontoDateKey(order.createdAt);
       if (!dateKey) continue;
 
-      // Try formattedTotal first, fallback to sellerTotalCents
       let cents = 0;
       if (order.formattedTotal) {
         const cleaned = order.formattedTotal.replace(/[^\d.,-]/g, "");
@@ -276,9 +273,8 @@ export function OrdersDailyView() {
               const setCode = it.setCode;
               const setName = it.set_name || "";
               const setKey = (setCode || setName || "").toString();
-              const isPicked = !!it.picked; // from backend allocation
+              const isPicked = !!it.picked;
 
-              // Use binLocations if present; otherwise treat as unassigned
               const binLocs =
                 it.binLocations && it.binLocations.length > 0
                   ? it.binLocations
@@ -293,12 +289,11 @@ export function OrdersDailyView() {
               for (const loc of binLocs) {
                 const binLabel = (loc.bin ?? "(unassigned)").toString();
                 const rowVal = loc.row;
-                const qtyAdd = loc.quantity ?? it.quantity ?? 0;
-
                 const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}`;
 
                 if (!bucket[key]) {
                   bucket[key] = {
+                    key,
                     date: dateKey,
                     name,
                     set_name: setName,
@@ -306,35 +301,42 @@ export function OrdersDailyView() {
                     bin: binLabel,
                     row: typeof rowVal === "number" ? rowVal : undefined,
                     quantity: 0,
-                    image_url: it.image_url, // 👈 initial image
-
-                    picked: false,
+                    image_url: it.image_url,
                     pickedCount: 0,
-                    unpickedCount: 0,
+                    allocations: [],
                   };
                 }
 
-                const line = bucket[key];
-
-                // If we don't have an image yet but this item does, fill it in
-                if (!line.image_url && it.image_url) {
-                  line.image_url = it.image_url;
+                if (!bucket[key].image_url && it.image_url) {
+                  bucket[key].image_url = it.image_url;
                 }
 
-                // Total quantity for this bin/row/set/card
-                line.quantity = (line.quantity || 0) + qtyAdd;
+                const qtyAdd = loc.quantity ?? it.quantity ?? 0;
+                bucket[key].quantity =
+                  (bucket[key].quantity || 0) + qtyAdd;
 
-                // Track picked vs unpicked quantities
                 if (isPicked) {
-                  line.pickedCount = (line.pickedCount || 0) + qtyAdd;
-                } else {
-                  line.unpickedCount = (line.unpickedCount || 0) + qtyAdd;
+                  bucket[key].pickedCount =
+                    (bucket[key].pickedCount || 0) + qtyAdd;
                 }
 
-                // Mark as fully picked only if there are no unpicked quantities
-                const totalPicked = line.pickedCount || 0;
-                const totalUnpicked = line.unpickedCount || 0;
-                line.picked = totalUnpicked === 0 && totalPicked > 0;
+                if (
+                  typeof it.cardTraderId === "number" ||
+                  typeof it.cardTraderId === "string"
+                ) {
+                  const ctId = Number(it.cardTraderId);
+                  // one allocation reference per (order, cardTraderId)
+                  if (
+                    !bucket[key].allocations.some(
+                      (a) => a.orderId === order.id && a.cardTraderId === ctId
+                    )
+                  ) {
+                    bucket[key].allocations.push({
+                      orderId: order.id,
+                      cardTraderId: ctId,
+                    });
+                  }
+                }
               }
             }
           })
@@ -359,6 +361,52 @@ export function OrdersDailyView() {
       ...prev,
       [key]: !prev[key],
     }));
+  };
+
+  // 🔘 Mark a whole daily line as picked (all backing allocations)
+  const handleMarkLinePicked = async (date: string, line: DailyLine) => {
+    if (!line.allocations || line.allocations.length === 0) return;
+
+    setPickingKey(line.key);
+    try {
+      await Promise.all(
+        line.allocations.map((alloc) =>
+          fetch(`${API_BASE}/order-allocations/pick`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId: alloc.orderId,
+              cardTraderId: alloc.cardTraderId,
+              // pickedBy: "DailyView", // optional: add this later if you want
+            }),
+          })
+        )
+      );
+
+      // Update local state so the row flips to "picked" without refresh
+      setDailyLinesByDate((prev) => {
+        const dayLines = prev[date];
+        if (!dayLines) return prev;
+
+        const updatedDayLines = dayLines.map((l) =>
+          l.key === line.key
+            ? {
+                ...l,
+                pickedCount: l.quantity,
+              }
+            : l
+        );
+
+        return {
+          ...prev,
+          [date]: updatedDayLines,
+        };
+      });
+    } catch (err) {
+      console.error("Failed to mark daily line picked", err);
+    } finally {
+      setPickingKey(null);
+    }
   };
 
   return (
@@ -460,13 +508,14 @@ export function OrdersDailyView() {
                         <Table.Th>Set</Table.Th>
                         <Table.Th>Card</Table.Th>
                         <Table.Th>Qty</Table.Th>
+                        <Table.Th>Pick</Table.Th>
                         <Table.Th>Image</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
                       {lines.length === 0 && (
                         <Table.Tr>
-                          <Table.Td colSpan={6}>
+                          <Table.Td colSpan={7}>
                             <Text c="dimmed" size="sm">
                               No line items found for this day yet.
                             </Text>
@@ -474,27 +523,24 @@ export function OrdersDailyView() {
                         </Table.Tr>
                       )}
 
-                      {pageLines.map((line, idx) => {
-                        const rowKey = `${line.bin}-${line.row || 0}-${
-                          line.setCode || line.set_name || ""
-                        }-${line.name}-${idx}`;
+                      {pageLines.map((line) => {
+                        const rowKey = line.key;
                         const isOpen = !!imageOpenByKey[rowKey];
-                        const isPicked = !!line.picked;
-                        const pickedCount = line.pickedCount || 0;
-                        const unpickedCount = line.unpickedCount || 0;
-                        const totalCount = pickedCount + unpickedCount || line.quantity;
+                        const fullyPicked =
+                          line.pickedCount >= line.quantity;
+                        const isPickingThis = pickingKey === rowKey;
 
                         return (
                           <Table.Tr
                             key={rowKey}
-                            style={{
-                              background: isPicked
-                                ? "rgba(46, 204, 113, 0.12)"
-                                : undefined,
-                              borderLeft: isPicked
-                                ? "3px solid #2ecc71"
-                                : "3px solid transparent",
-                            }}
+                            style={
+                              fullyPicked
+                                ? {
+                                    background:
+                                      "rgba(46, 204, 113, 0.10)",
+                                  }
+                                : undefined
+                            }
                           >
                             <Table.Td>
                               <Text>{line.bin}</Text>
@@ -511,14 +557,32 @@ export function OrdersDailyView() {
                               <Text>{line.name}</Text>
                             </Table.Td>
                             <Table.Td>
-                              <Stack gap={2}>
-                                <Text>{line.quantity}</Text>
-                                {(pickedCount > 0 || unpickedCount > 0) && (
-                                  <Text size="xs" c="dimmed">
-                                    Picked {pickedCount} / {totalCount}
-                                  </Text>
-                                )}
-                              </Stack>
+                              <Text>{line.quantity}</Text>
+                              <Text size="xs" c="dimmed">
+                                Picked {line.pickedCount} /{" "}
+                                {line.quantity}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Button
+                                size="xs"
+                                variant={fullyPicked ? "filled" : "light"}
+                                color={fullyPicked ? "green" : "gray"}
+                                disabled={
+                                  fullyPicked ||
+                                  isPickingThis ||
+                                  !line.allocations.length
+                                }
+                                onClick={() =>
+                                  handleMarkLinePicked(day.date, line)
+                                }
+                              >
+                                {fullyPicked
+                                  ? "Picked"
+                                  : isPickingThis
+                                  ? "Marking…"
+                                  : "Mark picked"}
+                              </Button>
                             </Table.Td>
                             <Table.Td>
                               <Stack gap={4}>
@@ -541,7 +605,7 @@ export function OrdersDailyView() {
                                       alt={line.name}
                                       fit="contain"
                                       radius="md"
-                                      w={220} // 👈 make it big enough to actually see
+                                      w={220}
                                     />
                                   </Box>
                                 )}

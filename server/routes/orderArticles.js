@@ -14,7 +14,7 @@ const router = express.Router();
  */
 const scryfallCache = new Map();
 
-// Max Scryfall calls allowed PER /api/order-articles/:id request
+// Max Scryfall calls allowed PER /api/order-articles/image request context
 const MAX_SCRYFALL_LOOKUPS_PER_REQUEST = 50;
 
 /**
@@ -60,7 +60,7 @@ async function getScryfallImage(cardName) {
 
 /**
  * Wrapper: Scryfall lookup with per-request limit + cache
- * ctx.lookups is per /api/order-articles/:id request
+ * Used ONLY by /image, NOT by /:id
  */
 async function getScryfallImageLimited(cardName, ctx) {
   if (!cardName) return null;
@@ -108,8 +108,9 @@ router.get("/image", async (req, res) => {
       return res.json({ image_url: scryfallCache.get(key) });
     }
 
-    // 2) Direct Scryfall lookup
-    const url = await getScryfallImage(name);
+    // 2) Direct Scryfall lookup with a small per-request cap
+    const ctx = { lookups: 0 };
+    const url = await getScryfallImageLimited(name, ctx);
 
     if (url) {
       scryfallCache.set(key, url);
@@ -129,14 +130,17 @@ router.get("/image", async (req, res) => {
  * Returns normalized line items for an order, including:
  * - cardTraderId / blueprintId
  * - quantity
- * - Scryfall image_url
  * - binLocations (from allocations / live allocation)
+ *
+ * ❗ IMPORTANT:
+ * This endpoint NO LONGER calls Scryfall.
+ * It only returns data + bins + a CardTrader blueprint image URL.
+ * Scryfall is ONLY used via /api/order-articles/image.
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const orderIdStr = String(id);
 
-  const skipImages = req.query.skipImages === "1";
   const debug = req.query.debug === "1";
 
   try {
@@ -170,7 +174,7 @@ router.get("/:id", async (req, res) => {
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
       set_name: a.expansion || null,
-      image_url: null, // will be filled with Scryfall
+      image_url: null, // will be filled with CardTrader blueprint URL later
       binLocations: [],
     }));
 
@@ -181,19 +185,21 @@ router.get("/:id", async (req, res) => {
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // Edge case: if we truly have NO CT IDs, we can *only* do Scryfall images,
-    // and we can't allocate bins anyway.
+    // Edge case: if we truly have NO CT IDs, we can't allocate bins anyway.
     if (!ctIds.length) {
-      // per-request context for Scryfall limits
-      const ctx = { lookups: 0 };
+      const finalNoCT = baseItems.map((it) => {
+        const resolvedBlueprintId = it.blueprintId ?? it.cardTraderId ?? null;
+        const image_url = resolvedBlueprintId
+          ? `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`
+          : null;
 
-      const finalNoCT = await Promise.all(
-        baseItems.map(async (it) => ({
+        return {
           ...it,
-          image_url: skipImages ? null : await getScryfallImageLimited(it.name, ctx),
+          blueprintId: resolvedBlueprintId,
+          image_url,
           binLocations: [],
-        }))
-      );
+        };
+      });
       return res.json(finalNoCT);
     }
 
@@ -222,10 +228,7 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 🔁 Per-request Scryfall context (resets on each order call)
-    const ctx = { lookups: 0 };
-
-    // 7️⃣ Build final lines (Scryfall images + bins)
+    // 7️⃣ Build final lines (bins + allocations, NO Scryfall)
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
@@ -239,13 +242,12 @@ router.get("/:id", async (req, res) => {
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
-            : it.cardTraderId ?? null;
+            : it.cardTraderId ?? it.blueprintId ?? null;
 
-        // 💥 IMAGE LOGIC — Scryfall ONLY, but capped + cached 💥
-        let image_url = null;
-        if (!skipImages) {
-          image_url = await getScryfallImageLimited(it.name, ctx);
-        }
+        // 🔁 CardTrader blueprint image for Orders view
+        const image_url = resolvedBlueprintId
+          ? `https://img.cardtrader.com/blueprints/${resolvedBlueprintId}/front.jpg`
+          : null;
 
         //
         // 🧱 VALIDATE ITEM

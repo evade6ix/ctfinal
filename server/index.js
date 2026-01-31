@@ -14,7 +14,8 @@ import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
-import orderAllocationsRouter from "./routes/OrderAllocation.js"; // ✅ NEW
+import orderAllocationsRouter from "./routes/orderAllocations.js"; // ✅
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;

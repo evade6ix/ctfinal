@@ -55,14 +55,6 @@ type OrderItem = {
   binLocations?: { bin: string; row: number; quantity: number }[];
 };
 
-type AllocationPickState = {
-  orderId: string;
-  cardTraderId: number;
-  picked: boolean;
-  pickedAt?: string | null;
-  pickedBy?: string | null;
-};
-
 export function OrdersView() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -79,11 +71,6 @@ export function OrdersView() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-
-  // ✅ NEW: map of orderId -> { cardTraderId -> picked }
-  const [pickedMap, setPickedMap] = useState<
-    Record<string | number, Record<number, boolean>>
-  >({});
 
   const fetchOrders = async () => {
     try {
@@ -113,47 +100,8 @@ export function OrdersView() {
     fetchOrders();
   }, []);
 
-  const loadPickStateForOrder = async (orderId: string | number) => {
-    try {
-      const res = await fetch(
-        `/api/order-allocations/by-order/${encodeURIComponent(
-          String(orderId)
-        )}`
-      );
-
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        console.error(
-          `Failed to load pick state for order ${orderId}: ${res.status}`,
-          txt.slice(0, 300)
-        );
-        return;
-      }
-
-      const data: AllocationPickState[] = await res.json();
-
-      const perCardTrader: Record<number, boolean> = {};
-      for (const alloc of data) {
-        if (typeof alloc.cardTraderId === "number") {
-          perCardTrader[alloc.cardTraderId] = !!alloc.picked;
-        }
-      }
-
-      setPickedMap((prev) => ({
-        ...prev,
-        [orderId]: perCardTrader,
-      }));
-    } catch (err) {
-      console.error("Error loading pick state for order", orderId, err);
-    }
-  };
-
   const loadItems = async (orderId: string | number) => {
-    if (itemsByOrder[orderId]) {
-      // Items already cached, but we might still want latest picked state
-      await loadPickStateForOrder(orderId);
-      return;
-    }
+    if (itemsByOrder[orderId]) return;
 
     try {
       const res = await fetch(`/api/order-articles/${orderId}`);
@@ -168,9 +116,6 @@ export function OrdersView() {
         ...prev,
         [orderId]: data,
       }));
-
-      // After loading items, also load pick state
-      await loadPickStateForOrder(orderId);
     } catch (err) {
       console.error("Failed loading order items", err);
       setItemsByOrder((prev) => ({
@@ -292,68 +237,15 @@ export function OrdersView() {
     }
   };
 
-  // ✅ Toggle picked state for ONE card line
-  const handleTogglePicked = async (
-    orderId: string | number,
-    item: OrderItem
-  ) => {
-    const ctId = item.cardTraderId;
-    if (typeof ctId === "undefined" || ctId === null) {
-      console.warn("No cardTraderId on item, cannot toggle picked");
-      return;
-    }
-
-    const currentForOrder = pickedMap[orderId] || {};
-    const currentlyPicked = !!currentForOrder[ctId];
-    const nextPicked = !currentlyPicked;
-
-    try {
-      const endpoint = nextPicked ? "pick" : "unpick";
-
-      const res = await fetch(`/api/order-allocations/${endpoint}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId,
-          cardTraderId: ctId,
-          pickedBy: "manual", // you can wire your username later
-        }),
-      });
-
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        console.error(
-          `Failed to ${endpoint} allocation`,
-          res.status,
-          txt.slice(0, 300)
-        );
-        return;
-      }
-
-      // If backend succeeded, update local map
-      setPickedMap((prev) => {
-        const existing = prev[orderId] || {};
-        return {
-          ...prev,
-          [orderId]: {
-            ...existing,
-            [ctId]: nextPicked,
-          },
-        };
-      });
-    } catch (err) {
-      console.error("Error toggling picked state", err);
-    }
-  };
-
   return (
     <Stack gap="md">
       <Group justify="space-between">
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-            CardTrader <strong>HUB_PENDING (Zero)</strong> seller orders only.
-            Expand an order to view line items, or switch to Daily Sales.
+            CardTrader{" "}
+            <strong>HUB_PENDING (Zero)</strong> seller orders only. Expand an
+            order to view line items, or switch to Daily Sales.
           </Text>
         </div>
 
@@ -513,93 +405,65 @@ export function OrdersView() {
                               itemsByOrder[o.id].length > 0 && (
                                 <Stack gap="md">
                                   {sortOrderItems(itemsByOrder[o.id]).map(
-                                    (it, idx) => {
-                                      const ctId =
-                                        typeof it.cardTraderId === "number"
-                                          ? it.cardTraderId
-                                          : undefined;
-                                      const isPicked =
-                                        ctId !== undefined &&
-                                        !!pickedMap[o.id]?.[ctId];
-
-                                      return (
-                                        <Group
-                                          key={idx}
-                                          align="flex-start"
-                                          wrap="nowrap"
+                                    (it, idx) => (
+                                      <Group
+                                        key={idx}
+                                        align="flex-start"
+                                        wrap="nowrap"
+                                        style={{
+                                          padding: "8px 0",
+                                          borderBottom: "1px solid #333",
+                                        }}
+                                      >
+                                        <img
+                                          src={getCardImageSrc(it)}
+                                          width={50}
+                                          height={70}
                                           style={{
-                                            padding: "8px 0",
-                                            borderBottom:
-                                              "1px solid #333",
-                                            background: isPicked
-                                              ? "rgba(46, 204, 113, 0.12)"
-                                              : "transparent",
-                                            borderLeft: isPicked
-                                              ? "3px solid #2ecc71"
-                                              : "3px solid transparent",
+                                            objectFit: "cover",
                                             borderRadius: 4,
                                           }}
+                                          onError={(e) => {
+                                            (e.target as HTMLImageElement).src =
+                                              "/card-placeholder.png";
+                                          }}
+                                        />
+
+                                        <Box style={{ flex: 1 }}>
+                                          <Text fw={500}>
+                                            {it.name || "No name"}
+                                          </Text>
+                                          <Text size="xs" c="dimmed">
+                                            {it.set_name || "Unknown set"}
+                                          </Text>
+
+                                          <Text size="sm" mt={4}>
+                                            Qty: {it.quantity ?? "?"}
+                                          </Text>
+
+                                          <Group gap={6} mt={6}>
+                                            {(it.binLocations || []).map(
+                                              (b, i) => (
+                                                <Badge key={i} color="yellow">
+                                                  {b.bin ?? "?"} / Row{" "}
+                                                  {b.row ?? "?"} (x
+                                                  {b.quantity ?? "?"})
+                                                </Badge>
+                                              )
+                                            )}
+                                          </Group>
+                                        </Box>
+
+                                        <Button
+                                          color="yellow"
+                                          size="xs"
+                                          variant="filled"
+                                          disabled
                                         >
-                                          <img
-                                            src={getCardImageSrc(it)}
-                                            width={50}
-                                            height={70}
-                                            style={{
-                                              objectFit: "cover",
-                                              borderRadius: 4,
-                                            }}
-                                            onError={(e) => {
-                                              (
-                                                e.target as HTMLImageElement
-                                              ).src = "/card-placeholder.png";
-                                            }}
-                                          />
-
-                                          <Box style={{ flex: 1 }}>
-                                            <Text fw={500}>
-                                              {it.name || "No name"}
-                                            </Text>
-                                            <Text size="xs" c="dimmed">
-                                              {it.set_name || "Unknown set"}
-                                            </Text>
-
-                                            <Text size="sm" mt={4}>
-                                              Qty: {it.quantity ?? "?"}
-                                            </Text>
-
-                                            <Group gap={6} mt={6}>
-                                              {(it.binLocations || []).map(
-                                                (b, i) => (
-                                                  <Badge
-                                                    key={i}
-                                                    color="yellow"
-                                                  >
-                                                    {b.bin ?? "?"} / Row{" "}
-                                                    {b.row ?? "?"} (x
-                                                    {b.quantity ?? "?"})
-                                                  </Badge>
-                                                )
-                                              )}
-                                            </Group>
-                                          </Box>
-
-                                          <Button
-                                            size="xs"
-                                            variant={
-                                              isPicked ? "filled" : "outline"
-                                            }
-                                            color={isPicked ? "green" : "gray"}
-                                            onClick={() =>
-                                              handleTogglePicked(o.id, it)
-                                            }
-                                          >
-                                            {isPicked
-                                              ? "Picked"
-                                              : "Mark picked"}
-                                          </Button>
-                                        </Group>
-                                      );
-                                    }
+                                          Deduct
+                                        </Button>
+                                      </Group>
+                                    )
                                   )}
                                 </Stack>
                               )}

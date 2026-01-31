@@ -47,6 +47,11 @@ type OrderItem = {
   setCode?: string; // if you ever add this later
   binLocations?: { bin: string; row: number; quantity: number }[];
   image_url?: string; // 👈 carry through from backend like grouped view
+
+  // NEW: same picked fields we added in weekly view
+  picked?: boolean;
+  pickedAt?: string | null;
+  pickedBy?: string | null;
 };
 
 // Aggregated daily picking line
@@ -59,6 +64,11 @@ type DailyLine = {
   row?: number;
   quantity: number;
   image_url?: string; // 👈 add image_url to the aggregated line
+
+  // NEW: aggregated picked state
+  picked?: boolean;      // true if this bin/row/set/card is fully picked
+  pickedCount?: number;  // total qty already picked across all orders
+  unpickedCount?: number; // total qty not picked yet
 };
 
 const API_BASE = "/api";
@@ -266,6 +276,7 @@ export function OrdersDailyView() {
               const setCode = it.setCode;
               const setName = it.set_name || "";
               const setKey = (setCode || setName || "").toString();
+              const isPicked = !!it.picked; // from backend allocation
 
               // Use binLocations if present; otherwise treat as unassigned
               const binLocs =
@@ -282,6 +293,7 @@ export function OrdersDailyView() {
               for (const loc of binLocs) {
                 const binLabel = (loc.bin ?? "(unassigned)").toString();
                 const rowVal = loc.row;
+                const qtyAdd = loc.quantity ?? it.quantity ?? 0;
 
                 const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}`;
 
@@ -295,17 +307,34 @@ export function OrdersDailyView() {
                     row: typeof rowVal === "number" ? rowVal : undefined,
                     quantity: 0,
                     image_url: it.image_url, // 👈 initial image
+
+                    picked: false,
+                    pickedCount: 0,
+                    unpickedCount: 0,
                   };
                 }
 
+                const line = bucket[key];
+
                 // If we don't have an image yet but this item does, fill it in
-                if (!bucket[key].image_url && it.image_url) {
-                  bucket[key].image_url = it.image_url;
+                if (!line.image_url && it.image_url) {
+                  line.image_url = it.image_url;
                 }
 
-                const qtyAdd = loc.quantity ?? it.quantity ?? 0;
-                bucket[key].quantity =
-                  (bucket[key].quantity || 0) + qtyAdd;
+                // Total quantity for this bin/row/set/card
+                line.quantity = (line.quantity || 0) + qtyAdd;
+
+                // Track picked vs unpicked quantities
+                if (isPicked) {
+                  line.pickedCount = (line.pickedCount || 0) + qtyAdd;
+                } else {
+                  line.unpickedCount = (line.unpickedCount || 0) + qtyAdd;
+                }
+
+                // Mark as fully picked only if there are no unpicked quantities
+                const totalPicked = line.pickedCount || 0;
+                const totalUnpicked = line.unpickedCount || 0;
+                line.picked = totalUnpicked === 0 && totalPicked > 0;
               }
             }
           })
@@ -450,9 +479,23 @@ export function OrdersDailyView() {
                           line.setCode || line.set_name || ""
                         }-${line.name}-${idx}`;
                         const isOpen = !!imageOpenByKey[rowKey];
+                        const isPicked = !!line.picked;
+                        const pickedCount = line.pickedCount || 0;
+                        const unpickedCount = line.unpickedCount || 0;
+                        const totalCount = pickedCount + unpickedCount || line.quantity;
 
                         return (
-                          <Table.Tr key={rowKey}>
+                          <Table.Tr
+                            key={rowKey}
+                            style={{
+                              background: isPicked
+                                ? "rgba(46, 204, 113, 0.12)"
+                                : undefined,
+                              borderLeft: isPicked
+                                ? "3px solid #2ecc71"
+                                : "3px solid transparent",
+                            }}
+                          >
                             <Table.Td>
                               <Text>{line.bin}</Text>
                             </Table.Td>
@@ -468,7 +511,14 @@ export function OrdersDailyView() {
                               <Text>{line.name}</Text>
                             </Table.Td>
                             <Table.Td>
-                              <Text>{line.quantity}</Text>
+                              <Stack gap={2}>
+                                <Text>{line.quantity}</Text>
+                                {(pickedCount > 0 || unpickedCount > 0) && (
+                                  <Text size="xs" c="dimmed">
+                                    Picked {pickedCount} / {totalCount}
+                                  </Text>
+                                )}
+                              </Stack>
                             </Table.Td>
                             <Table.Td>
                               <Stack gap={4}>

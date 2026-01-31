@@ -1,4 +1,4 @@
-// server/routes/orderArticles.js
+// server/routes/order-articles.js
 import express from "express";
 import axios from "axios";
 import { ct } from "../ctClient.js";
@@ -131,6 +131,7 @@ router.get("/image", async (req, res) => {
  * - quantity
  * - Scryfall image_url
  * - binLocations (from allocations / live allocation)
+ * - picked / pickedAt / pickedBy (from OrderAllocation, if present)
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -172,6 +173,7 @@ router.get("/:id", async (req, res) => {
       set_name: a.expansion || null,
       image_url: null, // will be filled with Scryfall
       binLocations: [],
+      // picked fields will be added below
     }));
 
     if (!baseItems.length) return res.json([]);
@@ -192,6 +194,9 @@ router.get("/:id", async (req, res) => {
           ...it,
           image_url: skipImages ? null : await getScryfallImageLimited(it.name, ctx),
           binLocations: [],
+          picked: false,
+          pickedAt: null,
+          pickedBy: null,
         }))
       );
       return res.json(finalNoCT);
@@ -225,7 +230,7 @@ router.get("/:id", async (req, res) => {
     // 🔁 Per-request Scryfall context (resets on each order call)
     const ctx = { lookups: 0 };
 
-    // 7️⃣ Build final lines (Scryfall images + bins)
+    // 7️⃣ Build final lines (Scryfall images + bins + picked state)
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
@@ -256,6 +261,9 @@ router.get("/:id", async (req, res) => {
             blueprintId: resolvedBlueprintId,
             image_url,
             binLocations: [],
+            picked: false,
+            pickedAt: null,
+            pickedBy: null,
           };
         }
 
@@ -281,6 +289,9 @@ router.get("/:id", async (req, res) => {
             blueprintId: resolvedBlueprintId,
             image_url,
             binLocations,
+            picked: !!existingAlloc.picked,
+            pickedAt: existingAlloc.pickedAt || null,
+            pickedBy: existingAlloc.pickedBy || null,
           };
         }
 
@@ -293,6 +304,9 @@ router.get("/:id", async (req, res) => {
             blueprintId: resolvedBlueprintId,
             image_url,
             binLocations: [],
+            picked: false,
+            pickedAt: null,
+            pickedBy: null,
           };
         }
 
@@ -305,6 +319,9 @@ router.get("/:id", async (req, res) => {
             blueprintId: resolvedBlueprintId,
             image_url,
             binLocations: [],
+            picked: false,
+            pickedAt: null,
+            pickedBy: null,
           };
         }
 
@@ -321,7 +338,7 @@ router.get("/:id", async (req, res) => {
         );
         await invItem.save();
 
-        // Save allocation
+        // Save allocation (start as NOT picked)
         await new OrderAllocation({
           orderId: orderIdStr,
           orderCode: order.code || null,
@@ -334,6 +351,9 @@ router.get("/:id", async (req, res) => {
             row: pl.row,
             quantity: pl.quantity,
           })),
+          picked: false,
+          pickedAt: null,
+          pickedBy: null,
         }).save();
 
         // Build output binLocations
@@ -352,6 +372,9 @@ router.get("/:id", async (req, res) => {
           blueprintId: resolvedBlueprintId,
           image_url,
           binLocations,
+          picked: false,
+          pickedAt: null,
+          pickedBy: null,
         };
       })
     );

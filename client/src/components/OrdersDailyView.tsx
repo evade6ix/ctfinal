@@ -71,7 +71,7 @@ type DailyLine = {
   quantity: number;
   image_url?: string;
 
-  // 👇 new: which allocations this line represents
+  // 👇 which allocations this line represents
   allocations: DailyAllocationRef[];
   totalAllocations: number;
   pickedAllocations: number;
@@ -146,6 +146,9 @@ export function OrdersDailyView() {
 
   // which row is currently doing a bulk pick/unpick call
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
+
+  // which row is currently loading a Scryfall image
+  const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
 
   // bump this to rebuild /order-articles aggregation after we pick/unpick
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -237,6 +240,7 @@ export function OrdersDailyView() {
   }, [orders]);
 
   // 3) For each hub_pending order, fetch /api/order-articles/:id and aggregate per day
+  //    NOTE: we use ?skipImages=1 so this DOES NOT spam Scryfall.
   useEffect(() => {
     async function buildDailyLines() {
       const zeroOrders = orders.filter(
@@ -261,7 +265,7 @@ export function OrdersDailyView() {
             let items: OrderItem[] = [];
             try {
               const res = await fetch(
-                `${API_BASE}/order-articles/${order.id}`
+                `${API_BASE}/order-articles/${order.id}?skipImages=1`
               );
               if (!res.ok) {
                 console.error(
@@ -319,7 +323,7 @@ export function OrdersDailyView() {
                     bin: binLabel,
                     row: typeof rowVal === "number" ? rowVal : undefined,
                     quantity: 0,
-                    image_url: it.image_url, // initial image
+                    image_url: it.image_url, // initial image (usually empty now)
                     allocations: [],
                     totalAllocations: 0,
                     pickedAllocations: 0,
@@ -329,7 +333,7 @@ export function OrdersDailyView() {
 
                 const line = bucket[key];
 
-                // fill in image once we get a real one
+                // fill in image once we get a real one (rare with skipImages=1, but harmless)
                 if (!line.image_url && it.image_url) {
                   line.image_url = it.image_url;
                 }
@@ -375,6 +379,57 @@ export function OrdersDailyView() {
     }));
   };
 
+  // 👉 On-demand Scryfall image for a single aggregated line
+  const handleShowImageForLine = async (line: DailyLine) => {
+    if (!line.name) return;
+
+    const rowKey = line.groupKey;
+    setImageLoadingKey(rowKey);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/order-articles/image?name=${encodeURIComponent(
+          line.name
+        )}`
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        console.error(
+          `Failed to fetch image for ${line.name}: ${res.status}`,
+          txt.slice(0, 200)
+        );
+        return;
+      }
+
+      const json = (await res.json()) as { image_url?: string | null };
+      if (!json.image_url) {
+        console.warn("No image_url returned for", line.name);
+        return;
+      }
+
+      // Update just that one line in dailyLinesByDate
+      setDailyLinesByDate((prev) => {
+        const dayLines = prev[line.date];
+        if (!dayLines) return prev;
+
+        const updatedDayLines = dayLines.map((l) =>
+          l.groupKey === rowKey
+            ? { ...l, image_url: json.image_url || l.image_url }
+            : l
+        );
+
+        return {
+          ...prev,
+          [line.date]: updatedDayLines,
+        };
+      });
+    } catch (err) {
+      console.error("Error in handleShowImageForLine:", err);
+    } finally {
+      setImageLoadingKey(null);
+    }
+  };
+
   // bulk pick/unpick for a single aggregated line
   const handleTogglePickedLine = async (line: DailyLine) => {
     const validAllocs = line.allocations.filter(
@@ -414,7 +469,7 @@ export function OrdersDailyView() {
         )
       );
 
-      // 🔁 rebuild daily lines from fresh /order-articles data
+      // 🔁 rebuild daily lines from fresh /order-articles data (still with skipImages=1)
       setRefreshVersion((v) => v + 1);
     } finally {
       setTogglingKey(null);
@@ -431,6 +486,7 @@ export function OrdersDailyView() {
             grouped by Toronto calendar day, with a bin / row / set / card
             picking list so you can pull cards every day instead of once per week.
             Pick / unpick per line is fully persistent via OrderAllocations.
+            Images are loaded on demand per card.
           </Text>
         </div>
       </Group>
@@ -578,7 +634,9 @@ export function OrdersDailyView() {
                                     handleTogglePickedLine(line)
                                   }
                                 >
-                                  {allPicked ? "Unpick all" : "Mark all picked"}
+                                  {allPicked
+                                    ? "Unpick all"
+                                    : "Mark all picked"}
                                 </Button>
                               </Stack>
                             </Table.Td>
@@ -587,11 +645,21 @@ export function OrdersDailyView() {
                                 <Button
                                   size="xs"
                                   variant="light"
-                                  onClick={() =>
-                                    toggleImageForKey(rowKey)
-                                  }
+                                  loading={imageLoadingKey === rowKey}
+                                  onClick={async () => {
+                                    // first time → fetch from Scryfall via backend
+                                    if (!line.image_url) {
+                                      await handleShowImageForLine(line);
+                                    }
+                                    // toggle visibility either way
+                                    toggleImageForKey(rowKey);
+                                  }}
                                 >
-                                  {isOpen ? "Hide image" : "View image"}
+                                  {isOpen
+                                    ? "Hide image"
+                                    : line.image_url
+                                    ? "View image"
+                                    : "Load image"}
                                 </Button>
                                 {isOpen && (
                                   <Box mt={4}>

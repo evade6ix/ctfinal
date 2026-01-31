@@ -150,7 +150,9 @@ router.get("/", async (req, res) => {
 });
 
 // =======================================================
-// POST /api/orders/sync  (unchanged)
+// POST /api/orders/sync
+//  - Allocates eligible orders
+//  - Cleans up allocations for finished orders
 // =======================================================
 router.post("/sync", async (req, res) => {
   try {
@@ -182,6 +184,9 @@ router.post("/sync", async (req, res) => {
     console.log("DEBUG /api/orders/sync states:", stateCounts);
     console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
 
+    // =====================================================
+    // 1) Determine which orders are ELIGIBLE for allocation
+    // =====================================================
     const eligible = allOrders.filter((o) => {
       const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
@@ -190,6 +195,40 @@ router.post("/sync", async (req, res) => {
       else return state === "paid";
     });
 
+    // =====================================================
+    // 2) CLEANUP: remove allocations for finished orders
+    // =====================================================
+    const TERMINAL_STATES = new Set([
+      "sent",     // shipped
+      "arrived",  // arrived at buyer/hub
+      "done",     // review/timeout done
+      "canceled", // cancelled
+      "lost",     // lost
+      "closed",   // CT0 small orders closed after weekly merge
+    ]);
+
+    const terminalOrders = allOrders.filter((o) => {
+      const state = String(o.state || o.status || "").toLowerCase();
+      return TERMINAL_STATES.has(state);
+    });
+
+    const terminalOrderIds = terminalOrders.map((o) => String(o.id));
+
+    let deletedAllocationsCount = 0;
+    if (terminalOrderIds.length) {
+      const deleteResult = await OrderAllocation.deleteMany({
+        orderId: { $in: terminalOrderIds },
+      });
+
+      deletedAllocationsCount = deleteResult?.deletedCount || 0;
+      console.log(
+        `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrderIds.length} terminal orders`
+      );
+    }
+
+    // =====================================================
+    // 3) Run allocations for ELIGIBLE orders (unchanged)
+    // =====================================================
     let triggered = 0;
     let skippedAlreadyAllocated = 0;
     let failed = 0;
@@ -240,6 +279,7 @@ router.post("/sync", async (req, res) => {
       triggered,
       skippedAlreadyAllocated,
       failed,
+      deletedAllocationsCount, // 🧹 include cleanup info
     };
 
     console.log("✅ [ORDERS] sync summary", summary);

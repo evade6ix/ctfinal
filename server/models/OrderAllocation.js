@@ -1,98 +1,69 @@
-// server/routes/orderAllocations.js
-import express from "express";
-import { OrderAllocation } from "../models/OrderAllocation.js";
+// server/models/OrderAllocation.js
+import mongoose from "mongoose";
 
-const router = express.Router();
+const orderAllocationSchema = new mongoose.Schema(
+  {
+    // CardTrader order id (we store as string for consistency)
+    orderId: {
+      type: String,
+      required: true,
+      index: true,
+    },
 
-/**
- * PATCH /api/order-allocations/pick
- * Body: { orderId: string | number, cardTraderId: number, pickedBy?: string }
- *
- * Marks THIS allocation as picked (does NOT touch inventory at all).
- */
-router.patch("/pick", async (req, res) => {
-  try {
-    const { orderId, cardTraderId, pickedBy } = req.body || {};
+    // CardTrader product id for this line
+    cardTraderId: {
+      type: Number,
+      required: true,
+      index: true,
+    },
 
-    if (!orderId || typeof cardTraderId === "undefined") {
-      return res
-        .status(400)
-        .json({ error: "orderId and cardTraderId are required" });
-    }
+    // Optional extras (keep these flexible so we don't break anything):
+    blueprintId: {
+      type: Number,
+    },
+    name: {
+      type: String,
+    },
 
-    const filter = {
-      orderId: String(orderId),
-      cardTraderId: Number(cardTraderId),
-    };
+    // How many copies this allocation represents
+    quantity: {
+      type: Number,
+      required: true,
+    },
 
-    const update = {
-      picked: true,
-      pickedAt: new Date(),
-    };
+    // Bin + row we’re pulling from
+    bin: {
+      type: String,
+    },
+    row: {
+      type: Number,
+    },
 
-    if (pickedBy && typeof pickedBy === "string") {
-      update.pickedBy = pickedBy;
-    }
-
-    const doc = await OrderAllocation.findOneAndUpdate(filter, update, {
-      new: true,
-    });
-
-    if (!doc) {
-      return res.status(404).json({
-        error: "Allocation not found for given orderId + cardTraderId",
-      });
-    }
-
-    res.json(doc);
-  } catch (err) {
-    console.error("❌ Error in PATCH /api/order-allocations/pick:", err);
-    res.status(500).json({ error: "Failed to mark allocation as picked" });
+    // Picking state
+    picked: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    pickedAt: {
+      type: Date,
+    },
+    pickedBy: {
+      type: String,
+    },
+  },
+  {
+    timestamps: true,
+    // Allow extra fields just in case your existing allocations
+    // already have other properties we’re not explicitly modeling.
+    strict: false,
   }
-});
+);
 
-/**
- * PATCH /api/order-allocations/unpick
- * Body: { orderId: string | number, cardTraderId: number }
- *
- * Clears picked state (still no inventory changes).
- */
-router.patch("/unpick", async (req, res) => {
-  try {
-    const { orderId, cardTraderId } = req.body || {};
+// Useful index when we look up a line for a specific order + CT product
+orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 });
 
-    if (!orderId || typeof cardTraderId === "undefined") {
-      return res
-        .status(400)
-        .json({ error: "orderId and cardTraderId are required" });
-    }
-
-    const filter = {
-      orderId: String(orderId),
-      cardTraderId: Number(cardTraderId),
-    };
-
-    const update = {
-      picked: false,
-      pickedAt: null,
-      pickedBy: null,
-    };
-
-    const doc = await OrderAllocation.findOneAndUpdate(filter, update, {
-      new: true,
-    });
-
-    if (!doc) {
-      return res.status(404).json({
-        error: "Allocation not found for given orderId + cardTraderId",
-      });
-    }
-
-    res.json(doc);
-  } catch (err) {
-    console.error("❌ Error in PATCH /api/order-allocations/unpick:", err);
-    res.status(500).json({ error: "Failed to clear picked state" });
-  }
-});
-
-export default router;
+export const OrderAllocation = mongoose.model(
+  "OrderAllocation",
+  orderAllocationSchema
+);

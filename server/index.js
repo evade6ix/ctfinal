@@ -14,7 +14,7 @@ import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
-import orderAllocationsRouter from "./routes/orderAllocations.js"; // ✅ NEW
+import orderAllocationsRouter from "./routes/OrderAllocation.js"; // ✅ NEW
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,7 +38,7 @@ app.use("/api/order-articles", orderArticlesRouter);
 app.use("/api/changelog", changelogRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
-app.use("/api/order-allocations", orderAllocationsRouter); // ✅ NEW
+app.use("/api/order-allocations", orderAllocationsRouter);
 
 // ===================================================================
 // AUTO-ALLOCATE / DEDUCT BINS FROM NEW ORDERS (CardTrader Zero)

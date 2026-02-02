@@ -5,19 +5,19 @@ const locationSchema = new mongoose.Schema(
     bin: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Bin",
-      required: true
+      required: true,
     },
     row: {
       type: Number,
       required: true,
-      min:
-      max: 100
+      min: 1,
+      max: 100, // <-- expanded from 5 to 100
     },
     quantity: {
       type: Number,
       required: true,
-      min: 0
-    }
+      min: 0,
+    },
   },
   { _id: false }
 );
@@ -35,7 +35,7 @@ const inventoryItemSchema = new mongoose.Schema(
     name: { type: String },
 
     // Image from CardTrader blueprint
-    imageUrl: { type: String, default: null },   // 👈 NEW FIELD
+    imageUrl: { type: String, default: null }, // 👈 image from CT or Scryfall
 
     // Pricing info from CardTrader
     condition: { type: String },
@@ -43,17 +43,17 @@ const inventoryItemSchema = new mongoose.Schema(
     price: { type: Number },
 
     // MTG-specific metadata
-    mtgColors: { type: String, index: true },    // 👈 NEW FIELD FOR COLORS, e.g. "G", "UR"
+    mtgColors: { type: String, index: true }, // e.g. "G", "UR"
 
     // Quantity & locations
     totalQuantity: { type: Number, required: true, min: 0 },
     locations: {
       type: [locationSchema],
-      default: []
+      default: [],
     },
 
     // For your future expansion
-    notes: { type: String }
+    notes: { type: String },
   },
   { timestamps: true }
 );

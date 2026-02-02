@@ -12,7 +12,7 @@ const binSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
-      max: 5 // as requested
+      max: 100 // as requested
     },
     description: {
       type: String,

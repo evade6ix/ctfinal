@@ -100,8 +100,9 @@ export function InventoryBinsView() {
         <div>
           <Title order={2}>Inventory Bins</Title>
           <Text c="dimmed" size="sm">
-            Create bins (1–5 rows) and assign cards into them. This is where
-            you’ll do the big one-time organization of existing inventory.
+            Create bins (up to 100 rows) and assign cards into them. This is
+            where you’ll do the big one-time organization of existing
+            inventory.
           </Text>
         </div>
       </Group>
@@ -121,7 +122,7 @@ export function InventoryBinsView() {
           <NumberInput
             label="Rows"
             min={1}
-            max={5}
+            max={100}
             value={newRows}
             w={120}
             onChange={(val) => {

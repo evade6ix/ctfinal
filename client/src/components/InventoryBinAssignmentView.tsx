@@ -31,7 +31,7 @@ type Location = {
 
 type InventoryItem = {
   _id: string;
-  cardTraderId?: number;            // 👈 add this
+  cardTraderId?: number; // 👈 add this
   name: string;
   setCode?: string;
   setName?: string;
@@ -43,7 +43,6 @@ type InventoryItem = {
   quantity?: number; // in case backend uses this instead of totalQuantity
   locations?: Location[];
 };
-
 
 type BulkAssignResponse = {
   ok?: boolean;
@@ -59,7 +58,6 @@ export function InventoryBinAssignmentView() {
   const [loadingBins, setLoadingBins] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [assigningUnassigned, setAssigningUnassigned] = useState(false);
-
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -219,8 +217,9 @@ export function InventoryBinAssignmentView() {
       setError("Select a bin to assign to.");
       return;
     }
-    if (typeof row !== "number" || row < 1 || row > 5) {
-      setError("Row must be between 1 and 5.");
+    // 🔁 UPDATED: allow rows 1–100
+    if (typeof row !== "number" || row < 1 || row > 100) {
+      setError("Row must be between 1 and 100.");
       return;
     }
 
@@ -328,62 +327,63 @@ export function InventoryBinAssignmentView() {
       setAssigning(false);
     }
   }
-async function handleAssignUnassignedToBin() {
-  if (!selectedSet) {
-    setError("Select a set first.");
-    return;
-  }
-  if (!selectedBinId) {
-    setError("Select a bin.");
-    return;
-  }
-  if (typeof row !== "number" || row < 1 || row > 5) {
-    setError("Row must be 1–5.");
-    return;
-  }
 
-  setError(null);
-  setSuccessMessage(null);
-  setAssigningUnassigned(true);
-
-  try {
-    const res = await fetch("/api/inventory/assign-unassigned-set-to-bin", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        setCode: selectedSet,
-        binId: selectedBinId,
-        row,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok || data.error || data.ok === false) {
-      throw new Error(data.error || "Assignment failed");
+  async function handleAssignUnassignedToBin() {
+    if (!selectedSet) {
+      setError("Select a set first.");
+      return;
+    }
+    if (!selectedBinId) {
+      setError("Select a bin.");
+      return;
+    }
+    // 🔁 UPDATED: allow rows 1–100
+    if (typeof row !== "number" || row < 1 || row > 100) {
+      setError("Row must be 1–100.");
+      return;
     }
 
-    setSuccessMessage(
-      `Assigned ${data.totalMoved} unassigned cards from ${selectedSet} to bin.`
-    );
+    setError(null);
+    setSuccessMessage(null);
+    setAssigningUnassigned(true);
 
-    // Refresh inventory list
-    const refresh = await fetch("/api/inventory");
-    if (refresh.ok) {
-      const json = await refresh.json();
-      const arr: InventoryItem[] = Array.isArray(json)
-        ? json
-        : json.items || [];
-      setItems(arr);
+    try {
+      const res = await fetch("/api/inventory/assign-unassigned-set-to-bin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          setCode: selectedSet,
+          binId: selectedBinId,
+          row,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error || data.ok === false) {
+        throw new Error(data.error || "Assignment failed");
+      }
+
+      setSuccessMessage(
+        `Assigned ${data.totalMoved} unassigned cards from ${selectedSet} to bin.`
+      );
+
+      // Refresh inventory list
+      const refresh = await fetch("/api/inventory");
+      if (refresh.ok) {
+        const json = await refresh.json();
+        const arr: InventoryItem[] = Array.isArray(json)
+          ? json
+          : json.items || [];
+        setItems(arr);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to assign unassigned items.");
+    } finally {
+      setAssigningUnassigned(false);
     }
-  } catch (err: any) {
-    console.error(err);
-    setError(err.message || "Failed to assign unassigned items.");
-  } finally {
-    setAssigningUnassigned(false);
   }
-}
-
 
   // ---------- Render ----------
   const anyLoading = loadingItems || loadingBins;
@@ -468,11 +468,12 @@ async function handleAssignUnassignedToBin() {
                 if (!Number.isFinite(v)) {
                   setRow(1);
                 } else {
-                  setRow(Math.min(5, Math.max(1, Math.floor(v))));
+                  // 🔁 UPDATED: clamp between 1 and 100
+                  setRow(Math.min(100, Math.max(1, Math.floor(v))));
                 }
               }}
               min={1}
-              max={5}
+              max={100}
               clampBehavior="strict"
               w={120}
             />
@@ -492,19 +493,18 @@ async function handleAssignUnassignedToBin() {
             Assign entire set to bin
           </Button>
           <Button
-  variant="outline"
-  radius="xl"
-  size="md"
-  leftSection={<IconBox size={18} />}
-  disabled={
-    !selectedSet || !selectedBinId || anyLoading || assigningUnassigned
-  }
-  loading={assigningUnassigned}
-  onClick={handleAssignUnassignedToBin}
->
-  Push unassigned to bin
-</Button>
-
+            variant="outline"
+            radius="xl"
+            size="md"
+            leftSection={<IconBox size={18} />}
+            disabled={
+              !selectedSet || !selectedBinId || anyLoading || assigningUnassigned
+            }
+            loading={assigningUnassigned}
+            onClick={handleAssignUnassignedToBin}
+          >
+            Push unassigned to bin
+          </Button>
         </Group>
       </Paper>
 

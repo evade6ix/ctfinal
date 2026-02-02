@@ -10,8 +10,8 @@ const locationSchema = new mongoose.Schema(
     row: {
       type: Number,
       required: true,
-      min: 1,
-      max: 5
+      min:
+      max: 100
     },
     quantity: {
       type: Number,

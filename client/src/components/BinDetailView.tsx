@@ -35,10 +35,10 @@ type BinItem = {
   locations: Location[];
   notes?: string;
 
-  // New fields from backend /api/bins/:binId/items
+  // from backend /api/bins/:binId/items
   qtyInBin?: number;
   valueInBin?: string;       // e.g. "C$12.34"
-  valueInBinCents?: number;  // numeric cents value
+  valueInBinCents?: number;  // cents
 };
 
 type BinDetailViewProps = {
@@ -58,7 +58,7 @@ export function BinDetailView({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // NEW: state for "see all locations for this card"
+  // "see all locations for this card"
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [locationsOpened, setLocationsOpened] = useState(false);
 
@@ -69,8 +69,6 @@ export function BinDetailView({
 
   const handleCloseLocations = () => {
     setLocationsOpened(false);
-    // optional: clear selection
-    // setSelectedItemId(null);
   };
 
   // Fetch items when the drawer opens and binId changes
@@ -111,10 +109,10 @@ export function BinDetailView({
     };
   }, [binId, opened]);
 
-  // Compute total quantity + value in THIS bin per item
+  // Compute per-row qty/value + row breakdown
   const rows = useMemo(() => {
     return items.map((item) => {
-      // Prefer backend-computed qtyInBin, fallback to summing locations
+      // Prefer backend qtyInBin, else sum locations
       const qtyInBin =
         typeof item.qtyInBin === "number"
           ? item.qtyInBin
@@ -123,7 +121,7 @@ export function BinDetailView({
               0
             );
 
-      // Prefer backend-formatted valueInBin, fallback to price * qtyInBin
+      // Prefer backend formatted value, else price * qty
       const fallbackValue =
         "C$" + (((item.price || 0) * qtyInBin).toFixed(2));
       const valueInBin = item.valueInBin ?? fallbackValue;
@@ -141,6 +139,21 @@ export function BinDetailView({
     });
   }, [items]);
 
+  // Total bin value across all rows
+  const totalBinValue = useMemo(() => {
+    return rows.reduce((sum, item: any) => {
+      // if backend gave cents, use that
+      if (typeof item.valueInBinCents === "number") {
+        return sum + item.valueInBinCents / 100;
+      }
+
+      // else parse from price * qty
+      const qty = item.qtyInBin ?? 0;
+      const price = item.price ?? 0;
+      return sum + price * qty;
+    }, 0);
+  }, [rows]);
+
   return (
     <Drawer
       opened={opened}
@@ -153,6 +166,12 @@ export function BinDetailView({
           <Text size="sm" c="dimmed">
             Showing all inventory items currently stored in this bin, with their
             quantity and listing value in this bin.
+          </Text>
+          <Text size="sm">
+            <Text component="span" fw={600}>
+              Bin value:
+            </Text>{" "}
+            C${totalBinValue.toFixed(2)}
           </Text>
         </Stack>
       }
@@ -192,7 +211,7 @@ export function BinDetailView({
                   <Table.Th>Condition</Table.Th>
                   <Table.Th>Foil</Table.Th>
                   <Table.Th ta="right">Qty in Bin</Table.Th>
-                  <Table.Th ta="right">Value</Table.Th> {/* NEW */}
+                  <Table.Th ta="right">Value</Table.Th>
                   <Table.Th>Row Breakdown</Table.Th>
                   <Table.Th>Notes</Table.Th>
                 </Table.Tr>
@@ -271,4 +290,3 @@ export function BinDetailView({
     </Drawer>
   );
 }
-

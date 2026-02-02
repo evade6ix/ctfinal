@@ -271,3 +271,4 @@ export function BinDetailView({
     </Drawer>
   );
 }
+

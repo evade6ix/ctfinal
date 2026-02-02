@@ -50,13 +50,14 @@ router.get("/:binId/items", async (req, res) => {
         price: 1,
         totalQuantity: 1,
         locations: 1,
-        notes: 1
+        notes: 1,
       }
     )
       .populate("locations.bin", "name rows") // so UI can show bin info if needed
       .lean();
 
     // 2) Filter each item's locations array so it only includes this bin
+    //    and compute quantity + value for THIS bin only
     const itemsWithFilteredLocations = items.map((item) => {
       const filteredLocations = (item.locations || []).filter((loc) => {
         if (!loc.bin) return false;
@@ -70,9 +71,25 @@ router.get("/:binId/items", async (req, res) => {
         return locBinId === String(binId);
       });
 
+      // quantity of this card in THIS bin
+      const qtyInBin = filteredLocations.reduce(
+        (sum, loc) => sum + (loc.quantity || 0),
+        0
+      );
+
+      // price is per card (in your currency units, e.g. C$)
+      const price = typeof item.price === "number" ? item.price : 0;
+
+      // store value in cents to avoid float issues, plus a formatted string
+      const valueInBinCents = Math.round(price * 100 * qtyInBin);
+      const valueInBin = "C$" + (valueInBinCents / 100).toFixed(2);
+
       return {
         ...item,
-        locations: filteredLocations
+        locations: filteredLocations,
+        qtyInBin,
+        valueInBinCents,
+        valueInBin,
       };
     });
 

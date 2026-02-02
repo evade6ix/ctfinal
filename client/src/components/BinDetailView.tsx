@@ -34,6 +34,11 @@ type BinItem = {
   totalQuantity?: number;
   locations: Location[];
   notes?: string;
+
+  // New fields from backend /api/bins/:binId/items
+  qtyInBin?: number;
+  valueInBin?: string;       // e.g. "C$12.34"
+  valueInBinCents?: number;  // numeric cents value
 };
 
 type BinDetailViewProps = {
@@ -106,13 +111,22 @@ export function BinDetailView({
     };
   }, [binId, opened]);
 
-  // Compute total quantity in THIS bin per item (sum of locations.quantity for this bin)
+  // Compute total quantity + value in THIS bin per item
   const rows = useMemo(() => {
     return items.map((item) => {
-      const qtyInBin = (item.locations || []).reduce(
-        (sum, loc) => sum + (loc.quantity || 0),
-        0
-      );
+      // Prefer backend-computed qtyInBin, fallback to summing locations
+      const qtyInBin =
+        typeof item.qtyInBin === "number"
+          ? item.qtyInBin
+          : (item.locations || []).reduce(
+              (sum, loc) => sum + (loc.quantity || 0),
+              0
+            );
+
+      // Prefer backend-formatted valueInBin, fallback to price * qtyInBin
+      const fallbackValue =
+        "C$" + (((item.price || 0) * qtyInBin).toFixed(2));
+      const valueInBin = item.valueInBin ?? fallbackValue;
 
       const rowBreakdown = (item.locations || [])
         .map((loc) => `Row ${loc.row}: ${loc.quantity}`)
@@ -121,6 +135,7 @@ export function BinDetailView({
       return {
         ...item,
         qtyInBin,
+        valueInBin,
         rowBreakdown,
       };
     });
@@ -136,7 +151,8 @@ export function BinDetailView({
         <Stack gap={2}>
           <Title order={3}>Bin: {binName || binId || "Unknown bin"}</Title>
           <Text size="sm" c="dimmed">
-            Showing all inventory items currently stored in this bin.
+            Showing all inventory items currently stored in this bin, with their
+            quantity and listing value in this bin.
           </Text>
         </Stack>
       }
@@ -176,6 +192,7 @@ export function BinDetailView({
                   <Table.Th>Condition</Table.Th>
                   <Table.Th>Foil</Table.Th>
                   <Table.Th ta="right">Qty in Bin</Table.Th>
+                  <Table.Th ta="right">Value</Table.Th> {/* NEW */}
                   <Table.Th>Row Breakdown</Table.Th>
                   <Table.Th>Notes</Table.Th>
                 </Table.Tr>
@@ -225,6 +242,9 @@ export function BinDetailView({
                     </Table.Td>
                     <Table.Td ta="right">
                       <Text fw={600}>{item.qtyInBin}</Text>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <Text fw={600}>{item.valueInBin}</Text>
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm">{item.rowBreakdown}</Text>

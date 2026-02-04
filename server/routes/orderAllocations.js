@@ -30,8 +30,6 @@ router.get("/by-order/:orderId", async (req, res) => {
 /**
  * PATCH /api/order-allocations/pick
  * Body: { orderId: string | number, cardTraderId: number, pickedBy?: string }
- *
- * Marks THIS allocation as picked (does NOT touch inventory at all).
  */
 router.patch("/pick", async (req, res) => {
   try {
@@ -77,8 +75,6 @@ router.patch("/pick", async (req, res) => {
 /**
  * PATCH /api/order-allocations/unpick
  * Body: { orderId: string | number, cardTraderId: number }
- *
- * Clears picked state (still no inventory changes).
  */
 router.patch("/unpick", async (req, res) => {
   try {
@@ -121,80 +117,62 @@ router.patch("/unpick", async (req, res) => {
 /**
  * POST /api/order-allocations/cleanup-stale
  *
- * Goes through all distinct orderIds in OrderAllocation and:
- *  - calls CardTrader /orders/:id
- *  - if order is 404 OR not in "paid" state, deletes all allocations for that orderId
+ * New strategy:
+ *  1) Ask CardTrader for ALL seller orders with state = "paid".
+ *  2) Build a set of those order IDs.
+ *  3) Delete any OrderAllocation whose orderId is NOT in that set.
  *
- * Run this after you ship your CardTrader Zero batch (or periodically).
+ * This matches the UI: you only care about allocations
+ * for orders that are currently PAID (i.e. Zero picking pool).
  */
 router.post("/cleanup-stale", async (req, res) => {
   try {
     const client = ct();
 
-    const orderIds = await OrderAllocation.distinct("orderId");
-    if (!orderIds.length) {
-      return res.json({
-        checkedOrders: 0,
-        deletedOrders: 0,
-        deletedAllocations: 0,
-        errorsCount: 0,
-        errors: [],
+    // 1️⃣ Pull ALL currently-paid CT orders (paged)
+    const paidOrderIds = new Set();
+    let page = 1;
+    const limit = 50;
+
+    // We keep paginating until CardTrader stops giving us results.
+    // If you want to be extra safe, you can cap the pages.
+    while (true) {
+      const r = await client.get("/orders", {
+        params: {
+          order_as: "seller",
+          sort: "date.desc",
+          page,
+          limit,
+          state: "paid", // important: only currently PAID
+        },
       });
-    }
 
-    let checked = 0;
-    let deletedOrders = 0;
-    let deletedAllocations = 0;
-    const errors = [];
+      const batch = Array.isArray(r.data) ? r.data : [];
+      if (!batch.length) break;
 
-    for (const rawOrderId of orderIds) {
-      const orderId = String(rawOrderId);
-      checked++;
-
-      let shouldDelete = false;
-
-      try {
-        const r = await client.get(`/orders/${orderId}`);
-        const order = r.data || {};
-        const stateRaw = (order.state || order.status || "").toString().toLowerCase();
-
-        // You only care about "paid" orders for Zero picking.
-        // Anything not paid is considered stale and we nuke allocations.
-        if (stateRaw !== "paid") {
-          shouldDelete = true;
-        }
-      } catch (err) {
-        const status = err?.response?.status;
-
-        // If CT says 404, that order is completely gone → delete allocations.
-        if (status === 404) {
-          shouldDelete = true;
-        } else {
-          errors.push({
-            orderId,
-            status,
-            message: err.message || String(err),
-          });
-          // Skip deletion for this one, move on
-          continue;
+      for (const o of batch) {
+        if (o && typeof o.id !== "undefined") {
+          paidOrderIds.add(String(o.id));
         }
       }
 
-      if (shouldDelete) {
-        const delResult = await OrderAllocation.deleteMany({ orderId });
-        if (delResult?.deletedCount > 0) {
-          deletedOrders++;
-          deletedAllocations += delResult.deletedCount;
-        }
-      }
+      if (batch.length < limit) break;
+      page++;
     }
+
+    const paidIdArray = Array.from(paidOrderIds);
+
+    // 2️⃣ Delete any allocations whose orderId is NOT in the "currently paid" set
+    const deleteFilter =
+      paidIdArray.length > 0
+        ? { orderId: { $nin: paidIdArray } }
+        : {}; // if no paid orders at all, nuke everything
+
+    const result = await OrderAllocation.deleteMany(deleteFilter);
 
     return res.json({
-      checkedOrders: checked,
-      deletedOrders,
-      deletedAllocations,
-      errorsCount: errors.length,
-      errors,
+      paidOrdersKept: paidIdArray.length,
+      deletedAllocations: result.deletedCount || 0,
     });
   } catch (err) {
     console.error("❌ Error in POST /api/order-allocations/cleanup-stale:", err);

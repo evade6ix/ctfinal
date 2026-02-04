@@ -17,10 +17,6 @@ const scryfallCache = new Map();
 // Max Scryfall calls allowed PER /api/order-articles/:id request
 const MAX_SCRYFALL_LOOKUPS_PER_REQUEST = 50;
 
-/**
- * Helper: Scryfall lookup by exact card name
- * (Low-level: does a real HTTP call)
- */
 async function getScryfallImage(cardName) {
   if (!cardName) return null;
   try {
@@ -53,10 +49,19 @@ async function getScryfallImage(cardName) {
 
     return null;
   } catch (e) {
-    console.warn("⚠️ Scryfall lookup failed for", cardName);
+    // 🔇 In production, stay quiet to avoid log spam on Railway
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("⚠️ Scryfall lookup failed for", cardName);
+    }
     return null;
   }
 }
+
+
+
+
+
+
 
 /**
  * Wrapper: Scryfall lookup with per-request limit + cache
@@ -88,6 +93,9 @@ async function getScryfallImageLimited(cardName, ctx) {
   return url;
 }
 
+
+
+
 /**
  * GET /api/order-articles/image?name=Card+Name
  * Returns a single Scryfall image URL for an exact card name.
@@ -116,13 +124,18 @@ router.get("/image", async (req, res) => {
     }
 
     return res.json({ image_url: url });
-  } catch (err) {
-    console.error("❌ /api/order-articles/image error:", err.message || err);
+    } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("❌ /api/order-articles/image error:", err.message || err);
+    }
     return res.status(500).json({
       error: "Failed to fetch card image",
     });
   }
 });
+
+
+
 
 /**
  * GET /api/order-articles/:id

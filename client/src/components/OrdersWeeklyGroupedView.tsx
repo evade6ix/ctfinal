@@ -276,40 +276,47 @@ export function OrdersWeeklyGroupedView() {
   // ───────────────────────────────────────────────
 
   // Send PATCH /api/order-allocations/pick
-  async function persistPick(orderId: string | number, item: OrderItem) {
-    if (!item.cardTraderId) return;
-
-    const key = `${orderId}-${item.cardTraderId}`;
+  async function persistPick(
+    orderId: string | number,
+    index: number,
+    item: OrderItem
+  ) {
+    const key = `${orderId}-${item.cardTraderId ?? `idx-${index}`}`;
     setPickingKey(key);
 
     try {
-      const res = await fetch("/api/order-allocations/pick", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId,
-          cardTraderId: item.cardTraderId,
-          pickedBy: "local", // later: use real username
-        }),
-      });
+      // Only hit backend if we have a cardTraderId
+      if (item.cardTraderId) {
+        const res = await fetch("/api/order-allocations/pick", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId,
+            cardTraderId: item.cardTraderId,
+            pickedBy: "local", // later: use real username
+          }),
+        });
 
-      if (!res.ok) {
-        console.error("Failed picking", await res.text());
-        return;
+        if (!res.ok) {
+          console.error("Failed picking", await res.text());
+        }
       }
 
-      // Update local item state
+      // Always update local item state (even if no cardTraderId)
       setItemsByOrder((prev) => {
         const arr = prev[orderId];
         if (!arr) return prev;
 
-        const updated = arr.map((x) =>
-          x.cardTraderId === item.cardTraderId
-            ? { ...x, picked: true, pickedAt: new Date().toISOString() }
-            : x
-        );
+        const clone = [...arr];
+        if (!clone[index]) return prev;
 
-        return { ...prev, [orderId]: updated };
+        clone[index] = {
+          ...clone[index],
+          picked: true,
+          pickedAt: new Date().toISOString(),
+        };
+
+        return { ...prev, [orderId]: clone };
       });
     } finally {
       setPickingKey(null);
@@ -317,39 +324,46 @@ export function OrdersWeeklyGroupedView() {
   }
 
   // Send PATCH /api/order-allocations/unpick
-  async function persistUnpick(orderId: string | number, item: OrderItem) {
-    if (!item.cardTraderId) return;
-
-    const key = `${orderId}-${item.cardTraderId}`;
+  async function persistUnpick(
+    orderId: string | number,
+    index: number,
+    item: OrderItem
+  ) {
+    const key = `${orderId}-${item.cardTraderId ?? `idx-${index}`}`;
     setPickingKey(key);
 
     try {
-      const res = await fetch("/api/order-allocations/unpick", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId,
-          cardTraderId: item.cardTraderId,
-        }),
-      });
+      // Only hit backend if we have a cardTraderId
+      if (item.cardTraderId) {
+        const res = await fetch("/api/order-allocations/unpick", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId,
+            cardTraderId: item.cardTraderId,
+          }),
+        });
 
-      if (!res.ok) {
-        console.error("Failed unpicking", await res.text());
-        return;
+        if (!res.ok) {
+          console.error("Failed unpicking", await res.text());
+        }
       }
 
-      // Update local item state
+      // Always update local item state (even if no cardTraderId)
       setItemsByOrder((prev) => {
         const arr = prev[orderId];
         if (!arr) return prev;
 
-        const updated = arr.map((x) =>
-          x.cardTraderId === item.cardTraderId
-            ? { ...x, picked: false, pickedAt: null }
-            : x
-        );
+        const clone = [...arr];
+        if (!clone[index]) return prev;
 
-        return { ...prev, [orderId]: updated };
+        clone[index] = {
+          ...clone[index],
+          picked: false,
+          pickedAt: null,
+        };
+
+        return { ...prev, [orderId]: clone };
       });
     } finally {
       setPickingKey(null);
@@ -367,7 +381,7 @@ export function OrdersWeeklyGroupedView() {
       const item = items[i];
       if (item && !item.picked) {
         // eslint-disable-next-line no-await-in-loop
-        await persistPick(orderId, item);
+        await persistPick(orderId, i, item);
       }
     }
   }
@@ -577,14 +591,14 @@ export function OrdersWeeklyGroupedView() {
                                         {visibleItems.map((it) => {
                                           const isPicked = !!it.picked;
                                           const key = `${o.id}-${it.cardTraderId}`;
-                                          const isBusy =
-                                            pickingKey === key;
-
-                                          // Map back to original index so
-                                          // "Mark up to here" works even
-                                          // when filtered.
                                           const originalIndex =
                                             allItems.indexOf(it);
+                                          const isBusy =
+                                            pickingKey ===
+                                            `${o.id}-${
+                                              it.cardTraderId ??
+                                              `idx-${originalIndex}`
+                                            }`;
 
                                           return (
                                             <Group
@@ -722,10 +736,12 @@ export function OrdersWeeklyGroupedView() {
                                                         isPicked
                                                           ? persistUnpick(
                                                               o.id,
+                                                              originalIndex,
                                                               it
                                                             )
                                                           : persistPick(
                                                               o.id,
+                                                              originalIndex,
                                                               it
                                                             )
                                                       }

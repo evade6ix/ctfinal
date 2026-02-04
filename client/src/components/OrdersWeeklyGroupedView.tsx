@@ -107,35 +107,39 @@ export function OrdersWeeklyGroupedView() {
     return `${startStr} – ${endStr}`;
   };
 
-  // Sort items: bins first (by bin → row), then no-bin by set_name → name
-  const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
-    return [...items].sort((a, b) => {
-      const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
-      const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
+  // Sort items:
+//  1) Items WITH bins first
+//  2) Items WITHOUT bins: set_name → name
+//  3) Items WITH bins: bin → row → set_name → name
+const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
+  return [...items].sort((a, b) => {
+    const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
+    const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
 
-      // 1) Items WITH bins first
-      if (aHasBin && !bHasBin) return -1;
-      if (!aHasBin && bHasBin) return 1;
+    // 1) Items WITH bins first
+    if (aHasBin && !bHasBin) return -1;
+    if (!aHasBin && bHasBin) return 1;
 
-      // 2) If both HAVE bins → sort by bin name then row
-      if (aHasBin && bHasBin) {
-        const aLoc = a.binLocations![0];
-        const bLoc = b.binLocations![0];
+    // 2) Both HAVE bins → sort by bin → row → set_name → name
+    if (aHasBin && bHasBin) {
+      const aLoc = a.binLocations![0];
+      const bLoc = b.binLocations![0];
 
-        const aBin = (aLoc.bin || "").toString();
-        const bBin = (bLoc.bin || "").toString();
+      const aBin = (aLoc.bin || "").toString();
+      const bBin = (bLoc.bin || "").toString();
 
-        if (aBin !== bBin) {
-          return aBin.localeCompare(bBin, undefined, { numeric: true });
-        }
+      if (aBin !== bBin) {
+        return aBin.localeCompare(bBin, undefined, { numeric: true });
+      }
 
-        const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
-        const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
+      const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
+      const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
 
+      if (aRow !== bRow) {
         return aRow - bRow;
       }
 
-      // 3) Neither has bins → group/sort by set_name, then name
+      // 👉 Inside the SAME bin & row, sort by set_name then name
       const aSet = (a.set_name || "").toString();
       const bSet = (b.set_name || "").toString();
 
@@ -147,8 +151,29 @@ export function OrdersWeeklyGroupedView() {
       const bName = (b.name || "").toString();
 
       return aName.localeCompare(bName, undefined, { numeric: true });
-    });
-  };
+    }
+
+    // 3) Neither has bins → group/sort by set_name, then name
+    const aSet = (a.set_name || "").toString();
+    const bSet = (b.set_name || "").toString();
+
+    if (aSet !== bSet) {
+      return aSet.localeCompare(bSet, undefined, { numeric: true });
+    }
+
+    const aName = (a.name || "").toString();
+    const bName = (b.name || "").toString();
+
+    return aName.localeCompare(bName, undefined, { numeric: true });
+  });
+};
+
+
+
+
+
+
+
 
   // ⭐ Scryfall-only image selection: image_url → placeholder
   const getCardImageSrc = (it: OrderItem) => {

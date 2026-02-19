@@ -18,6 +18,66 @@ function ct() {
   });
 }
 
+// =======================
+// Tiny market-price cache
+// =======================
+const MARKET_TTL_MS = 30 * 1000; // 30 seconds
+// key: blueprintId -> { at, value }
+const marketCache = new Map();
+
+/**
+ * Fetch cheapest EN listing price for a blueprint (any game).
+ * Returns a number in your currency (e.g. 1.23) or null if none.
+ */
+async function getMarketPriceForBlueprint(client, blueprintId) {
+  const key = String(blueprintId);
+  const now = Date.now();
+
+  const cached = marketCache.get(key);
+  if (cached && now - cached.at < MARKET_TTL_MS) {
+    return cached.value;
+  }
+
+  try {
+    const { data } = await client.get("/marketplace/products", {
+      params: {
+        blueprint_id: blueprintId,
+        language: "en",
+      },
+    });
+
+    const arr = data?.[key] || [];
+    if (!Array.isArray(arr) || arr.length === 0) {
+      marketCache.set(key, { at: now, value: null });
+      return null;
+    }
+
+    const cheapest = arr
+      .filter((x) => x?.price?.cents != null)
+      .sort((a, b) => a.price.cents - b.price.cents)[0];
+
+    const value =
+      cheapest?.price?.cents != null
+        ? Number(cheapest.price.cents) / 100
+        : null;
+
+    marketCache.set(key, { at: now, value });
+    return value;
+  } catch (err) {
+    console.error(
+      "Error fetching market for blueprint",
+      blueprintId,
+      err?.response?.data || err.message
+    );
+    marketCache.set(key, { at: now, value: null });
+    return null;
+  }
+}
+
+// =======================
+// GET /api/catalog/games
+// (already had this in your file, just left as-is)
+// =======================
 router.get("/games", async (req, res) => {
   try {
     const client = ct();
@@ -31,7 +91,7 @@ router.get("/games", async (req, res) => {
     );
     console.log("CardTrader /games raw response value:", data);
 
-    // CardTrader is returning { array: [...] }
+    // CardTrader is returning { array: [...] } in some environments
     const arr = Array.isArray(data)
       ? data
       : Array.isArray(data?.array)
@@ -59,8 +119,6 @@ router.get("/games", async (req, res) => {
   }
 });
 
-
-
 // =======================
 // GET /api/catalog/sets?gameId=1
 // (expansions for a game)
@@ -75,13 +133,14 @@ router.get("/sets", async (req, res) => {
   try {
     const client = ct();
     const { data } = await client.get("/expansions");
-const expArr = Array.isArray(data)
-  ? data
-  : Array.isArray(data?.expansions)
-  ? data.expansions
-  : [];
-const expansions = expArr.filter((exp) => exp.game_id === gameId);
 
+    const expArr = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.expansions)
+      ? data.expansions
+      : [];
+
+    const expansions = expArr.filter((exp) => exp.game_id === gameId);
 
     const sets = expansions.map((exp) => ({
       id: exp.id,
@@ -106,7 +165,7 @@ const expansions = expArr.filter((exp) => exp.game_id === gameId);
 // =======================
 // POST /api/catalog/search
 // Body: { gameId, setIds: [expansionId], query, page, pageSize }
-// Returns CardTrader blueprints
+// Returns CardTrader blueprints WITH market price
 // =======================
 router.post("/search", async (req, res) => {
   let { gameId, setIds, query, page, pageSize } = req.body || {};
@@ -131,10 +190,14 @@ router.post("/search", async (req, res) => {
     const client = ct();
 
     // Pull expansions once so we can decorate results with set code/name
-    const { data: allExpansions } = await client.get("/expansions");
-    const expansionsById = new Map(
-      (allExpansions || []).map((exp) => [exp.id, exp])
-    );
+    const { data: expData } = await client.get("/expansions");
+    const expArr = Array.isArray(expData)
+      ? expData
+      : Array.isArray(expData?.expansions)
+      ? expData.expansions
+      : [];
+
+    const expansionsById = new Map(expArr.map((exp) => [exp.id, exp]));
 
     const allBlueprints = [];
 
@@ -194,10 +257,21 @@ router.post("/search", async (req, res) => {
     const total = filtered.length;
     const start = (page - 1) * pageSize;
     const end = start + pageSize;
-    const pageItems = filtered.slice(start, end);
+    const slice = filtered.slice(start, end);
+
+    // Enrich page slice with market price (any game, not just Magic)
+    const items = await Promise.all(
+      slice.map(async (bp) => {
+        const market = await getMarketPriceForBlueprint(client, bp.id);
+        return {
+          ...bp,
+          market, // number | null
+        };
+      })
+    );
 
     res.json({
-      items: pageItems,
+      items,
       total,
       page,
       pageSize,

@@ -23,13 +23,17 @@ function ct() {
 // =======================
 const MARKET_TTL_MS = 30 * 1000; // 30 seconds
 // key: blueprintId -> { at, value }
-const marketCache = new Map();
+const marketCache = new Map<string, { at: number; value: number | null }>();
 
 /**
- * Fetch cheapest EN listing price for a blueprint (any game).
+ * Fetch cheapest listing price for a blueprint (any game).
+ * Tries EN first, then falls back to any language.
  * Returns a number in your currency (e.g. 1.23) or null if none.
  */
-async function getMarketPriceForBlueprint(client, blueprintId) {
+async function getMarketPriceForBlueprint(
+  client: ReturnType<typeof ct>,
+  blueprintId: number | string
+): Promise<number | null> {
   const key = String(blueprintId);
   const now = Date.now();
 
@@ -39,22 +43,36 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
   }
 
   try {
-    const { data } = await client.get("/marketplace/products", {
+    // 1) Try English listings first (what you originally had)
+    let { data } = await client.get("/marketplace/products", {
       params: {
         blueprint_id: blueprintId,
         language: "en",
       },
     });
 
-    const arr = data?.[key] || [];
+    let arr = data?.[key] || [];
+
+    // 2) If no EN listings, retry without language filter (all languages)
+    if (!Array.isArray(arr) || arr.length === 0) {
+      const fallbackRes = await client.get("/marketplace/products", {
+        params: {
+          blueprint_id: blueprintId,
+          // no language param -> all listings
+        },
+      });
+      data = fallbackRes.data;
+      arr = data?.[key] || [];
+    }
+
     if (!Array.isArray(arr) || arr.length === 0) {
       marketCache.set(key, { at: now, value: null });
       return null;
     }
 
     const cheapest = arr
-      .filter((x) => x?.price?.cents != null)
-      .sort((a, b) => a.price.cents - b.price.cents)[0];
+      .filter((x: any) => x?.price?.cents != null)
+      .sort((a: any, b: any) => a.price.cents - b.price.cents)[0];
 
     const value =
       cheapest?.price?.cents != null
@@ -63,7 +81,7 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
 
     marketCache.set(key, { at: now, value });
     return value;
-  } catch (err) {
+  } catch (err: any) {
     console.error(
       "Error fetching market for blueprint",
       blueprintId,
@@ -76,7 +94,6 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
 
 // =======================
 // GET /api/catalog/games
-// (already had this in your file, just left as-is)
 // =======================
 router.get("/games", async (req, res) => {
   try {
@@ -94,22 +111,22 @@ router.get("/games", async (req, res) => {
     // CardTrader is returning { array: [...] } in some environments
     const arr = Array.isArray(data)
       ? data
-      : Array.isArray(data?.array)
-      ? data.array
+      : Array.isArray((data as any)?.array)
+      ? (data as any).array
       : [];
 
     if (arr.length === 0) {
       console.warn("CardTrader /games had no array data.");
     }
 
-    const games = arr.map((g) => ({
+    const games = arr.map((g: any) => ({
       id: g.id,
       name: g.name,
       displayName: g.display_name || g.displayName || g.name,
     }));
 
     res.json({ games });
-  } catch (err) {
+  } catch (err: any) {
     const details = err.response?.data || err.message || String(err);
     console.error("Error fetching games from CardTrader:", details);
     res.status(500).json({
@@ -136,13 +153,13 @@ router.get("/sets", async (req, res) => {
 
     const expArr = Array.isArray(data)
       ? data
-      : Array.isArray(data?.expansions)
-      ? data.expansions
+      : Array.isArray((data as any)?.expansions)
+      ? (data as any).expansions
       : [];
 
-    const expansions = expArr.filter((exp) => exp.game_id === gameId);
+    const expansions = expArr.filter((exp: any) => exp.game_id === gameId);
 
-    const sets = expansions.map((exp) => ({
+    const sets = expansions.map((exp: any) => ({
       id: exp.id,
       code: exp.code,
       name: exp.name,
@@ -150,7 +167,7 @@ router.get("/sets", async (req, res) => {
     }));
 
     res.json({ sets });
-  } catch (err) {
+  } catch (err: any) {
     console.error(
       "Error fetching sets from CardTrader:",
       err.response?.data || err.message
@@ -193,13 +210,15 @@ router.post("/search", async (req, res) => {
     const { data: expData } = await client.get("/expansions");
     const expArr = Array.isArray(expData)
       ? expData
-      : Array.isArray(expData?.expansions)
-      ? expData.expansions
+      : Array.isArray((expData as any)?.expansions)
+      ? (expData as any).expansions
       : [];
 
-    const expansionsById = new Map(expArr.map((exp) => [exp.id, exp]));
+    const expansionsById = new Map<number, any>(
+      expArr.map((exp: any) => [exp.id, exp])
+    );
 
-    const allBlueprints = [];
+    const allBlueprints: any[] = [];
 
     // Loop through chosen expansions and hit /blueprints/export for each
     for (const expansionIdRaw of setIds) {
@@ -211,7 +230,7 @@ router.post("/search", async (req, res) => {
           params: { expansion_id: expansionId },
         });
 
-        (data || []).forEach((bp) => {
+        (data || []).forEach((bp: any) => {
           const exp = expansionsById.get(bp.expansion_id);
           allBlueprints.push({
             id: bp.id,
@@ -228,7 +247,7 @@ router.post("/search", async (req, res) => {
             imageUrl: bp.image_url,
           });
         });
-      } catch (err) {
+      } catch (err: any) {
         console.error(
           `Error fetching blueprints for expansion ${expansionId}:`,
           err.response?.data || err.message
@@ -276,7 +295,7 @@ router.post("/search", async (req, res) => {
       page,
       pageSize,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error(
       "Error searching CardTrader catalog:",
       err.response?.data || err.message

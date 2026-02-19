@@ -23,17 +23,14 @@ function ct() {
 // =======================
 const MARKET_TTL_MS = 30 * 1000; // 30 seconds
 // key: blueprintId -> { at, value }
-const marketCache = new Map<string, { at: number; value: number | null }>();
+const marketCache = new Map();
 
 /**
  * Fetch cheapest listing price for a blueprint (any game).
  * Tries EN first, then falls back to any language.
  * Returns a number in your currency (e.g. 1.23) or null if none.
  */
-async function getMarketPriceForBlueprint(
-  client: ReturnType<typeof ct>,
-  blueprintId: number | string
-): Promise<number | null> {
+async function getMarketPriceForBlueprint(client, blueprintId) {
   const key = String(blueprintId);
   const now = Date.now();
 
@@ -43,15 +40,16 @@ async function getMarketPriceForBlueprint(
   }
 
   try {
-    // 1) Try English listings first (what you originally had)
-    let { data } = await client.get("/marketplace/products", {
+    // 1) Try English listings first (original behavior)
+    let resp = await client.get("/marketplace/products", {
       params: {
         blueprint_id: blueprintId,
         language: "en",
       },
     });
 
-    let arr = data?.[key] || [];
+    let data = resp.data;
+    let arr = data && data[key] ? data[key] : [];
 
     // 2) If no EN listings, retry without language filter (all languages)
     if (!Array.isArray(arr) || arr.length === 0) {
@@ -62,7 +60,7 @@ async function getMarketPriceForBlueprint(
         },
       });
       data = fallbackRes.data;
-      arr = data?.[key] || [];
+      arr = data && data[key] ? data[key] : [];
     }
 
     if (!Array.isArray(arr) || arr.length === 0) {
@@ -71,17 +69,17 @@ async function getMarketPriceForBlueprint(
     }
 
     const cheapest = arr
-      .filter((x: any) => x?.price?.cents != null)
-      .sort((a: any, b: any) => a.price.cents - b.price.cents)[0];
+      .filter((x) => x && x.price && x.price.cents != null)
+      .sort((a, b) => a.price.cents - b.price.cents)[0];
 
     const value =
-      cheapest?.price?.cents != null
+      cheapest && cheapest.price && cheapest.price.cents != null
         ? Number(cheapest.price.cents) / 100
         : null;
 
     marketCache.set(key, { at: now, value });
     return value;
-  } catch (err: any) {
+  } catch (err) {
     console.error(
       "Error fetching market for blueprint",
       blueprintId,
@@ -111,22 +109,22 @@ router.get("/games", async (req, res) => {
     // CardTrader is returning { array: [...] } in some environments
     const arr = Array.isArray(data)
       ? data
-      : Array.isArray((data as any)?.array)
-      ? (data as any).array
+      : Array.isArray(data && data.array)
+      ? data.array
       : [];
 
     if (arr.length === 0) {
       console.warn("CardTrader /games had no array data.");
     }
 
-    const games = arr.map((g: any) => ({
+    const games = arr.map((g) => ({
       id: g.id,
       name: g.name,
       displayName: g.display_name || g.displayName || g.name,
     }));
 
     res.json({ games });
-  } catch (err: any) {
+  } catch (err) {
     const details = err.response?.data || err.message || String(err);
     console.error("Error fetching games from CardTrader:", details);
     res.status(500).json({
@@ -153,13 +151,13 @@ router.get("/sets", async (req, res) => {
 
     const expArr = Array.isArray(data)
       ? data
-      : Array.isArray((data as any)?.expansions)
-      ? (data as any).expansions
+      : Array.isArray(data && data.expansions)
+      ? data.expansions
       : [];
 
-    const expansions = expArr.filter((exp: any) => exp.game_id === gameId);
+    const expansions = expArr.filter((exp) => exp.game_id === gameId);
 
-    const sets = expansions.map((exp: any) => ({
+    const sets = expansions.map((exp) => ({
       id: exp.id,
       code: exp.code,
       name: exp.name,
@@ -167,7 +165,7 @@ router.get("/sets", async (req, res) => {
     }));
 
     res.json({ sets });
-  } catch (err: any) {
+  } catch (err) {
     console.error(
       "Error fetching sets from CardTrader:",
       err.response?.data || err.message
@@ -210,15 +208,15 @@ router.post("/search", async (req, res) => {
     const { data: expData } = await client.get("/expansions");
     const expArr = Array.isArray(expData)
       ? expData
-      : Array.isArray((expData as any)?.expansions)
-      ? (expData as any).expansions
+      : Array.isArray(expData && expData.expansions)
+      ? expData.expansions
       : [];
 
-    const expansionsById = new Map<number, any>(
-      expArr.map((exp: any) => [exp.id, exp])
+    const expansionsById = new Map(
+      expArr.map((exp) => [exp.id, exp])
     );
 
-    const allBlueprints: any[] = [];
+    const allBlueprints = [];
 
     // Loop through chosen expansions and hit /blueprints/export for each
     for (const expansionIdRaw of setIds) {
@@ -230,7 +228,7 @@ router.post("/search", async (req, res) => {
           params: { expansion_id: expansionId },
         });
 
-        (data || []).forEach((bp: any) => {
+        (data || []).forEach((bp) => {
           const exp = expansionsById.get(bp.expansion_id);
           allBlueprints.push({
             id: bp.id,
@@ -239,15 +237,15 @@ router.post("/search", async (req, res) => {
             gameId: bp.game_id,
             categoryId: bp.category_id,
             expansionId: bp.expansion_id,
-            setCode: exp?.code,
-            setName: exp?.name,
+            setCode: exp && exp.code,
+            setName: exp && exp.name,
             scryfallId: bp.scryfall_id,
             tcgPlayerId: bp.tcg_player_id,
             cardMarketIds: bp.card_market_ids,
             imageUrl: bp.image_url,
           });
         });
-      } catch (err: any) {
+      } catch (err) {
         console.error(
           `Error fetching blueprints for expansion ${expansionId}:`,
           err.response?.data || err.message
@@ -261,7 +259,7 @@ router.post("/search", async (req, res) => {
     // Optional name filter
     if (trimmedQuery) {
       filtered = filtered.filter((bp) =>
-        bp.name?.toLowerCase().includes(trimmedQuery)
+        bp.name && bp.name.toLowerCase().includes(trimmedQuery)
       );
     }
 
@@ -295,7 +293,7 @@ router.post("/search", async (req, res) => {
       page,
       pageSize,
     });
-  } catch (err: any) {
+  } catch (err) {
     console.error(
       "Error searching CardTrader catalog:",
       err.response?.data || err.message

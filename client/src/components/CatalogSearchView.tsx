@@ -54,6 +54,7 @@ type CatalogCard = {
   language?: string;
   condition?: string;
   imageUrl?: string;
+  market?: number | null; // ✅ market price from backend
 };
 
 type Condition = "NM" | "LP" | "MP" | "HP";
@@ -366,21 +367,29 @@ export function CatalogSearchView() {
         : [];
 
       const mapped: CatalogCard[] = itemsRaw.map((c: any) => ({
-        id: c.id ?? `${c.setCode}-${c.name}`,
-        name: c.name ?? "Unknown Card",
-        setName: c.setName,
-        setCode: c.setCode,
-        rarity: c.rarity,
-        number: c.collectorNumber ?? c.number,
-        language: c.language,
-        condition: c.condition,
-        imageUrl:
-          c.image_url ||
-          c.imageUrl ||
-          c.image ||
-          (Array.isArray(c.images) && c.images[0]?.url) ||
-          undefined,
-      }));
+  id: c.id ?? `${c.setCode}-${c.name}`,
+  name: c.name ?? "Unknown Card",
+  setName: c.setName,
+  setCode: c.setCode,
+  rarity: c.rarity,
+  number: c.collectorNumber ?? c.number,
+  language: c.language,
+  condition: c.condition,
+  imageUrl:
+    c.image_url ||
+    c.imageUrl ||
+    c.image ||
+    (Array.isArray(c.images) && c.images[0]?.url) ||
+    undefined,
+  // ✅ read market from backend if present
+  market:
+    typeof c.market === "number"
+      ? c.market
+      : typeof c.marketPrice === "number"
+      ? c.marketPrice
+      : null,
+}));
+
 
       const totalFromServer =
         typeof data.total === "number" ? data.total : mapped.length;
@@ -910,9 +919,6 @@ export function CatalogSearchView() {
   );
 }
 
-// ============================
-// Per-row card with market, suggested, qty, price, condition, foil
-// ============================
 function CatalogResultRow({
   card,
   defaultFoil,
@@ -922,83 +928,20 @@ function CatalogResultRow({
   defaultFoil: boolean;
   onStage: (item: StagedItem) => void;
 }) {
-  const [market, setMarket] = useState<number | null>(null);
-  const [loadingMarket, setLoadingMarket] = useState(false);
-  const [marketError, setMarketError] = useState<string | null>(null);
-
   const [qty, setQty] = useState(1);
-  const [price, setPrice] = useState<number | null>(null);
   const [condition, setCondition] = useState<Condition>("NM");
   const [foil, setFoil] = useState(defaultFoil);
+
+  // ✅ market now comes from the search response
+  const market = card.market ?? null;
+  const [price, setPrice] = useState<number | null>(
+    market != null ? clampSuggested(market) : null
+  );
 
   // keep foil switch in sync with default toggle in header
   useEffect(() => {
     setFoil(defaultFoil);
   }, [defaultFoil]);
-
-  // Load market price for this blueprint
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadMarket() {
-      try {
-        setLoadingMarket(true);
-        setMarketError(null);
-
-        const res = await fetch(
-          `/api/ct/market?blueprint_id=${encodeURIComponent(
-            String(card.id)
-          )}&foil=${foil ? "true" : "false"}`
-        );
-
-        const contentType = res.headers.get("content-type") || "";
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(
-            text || `Market failed with status ${res.status}`
-          );
-        }
-
-        if (!contentType.includes("application/json")) {
-          const text = await res.text();
-          throw new Error(
-            `Expected JSON from /api/ct/market but got: ${text.slice(0, 200)}`
-          );
-        }
-
-        const data = await res.json();
-
-        const m =
-          typeof data.market === "number" && Number.isFinite(data.market)
-            ? data.market
-            : null;
-
-        if (!cancelled) {
-          setMarket(m);
-          if (m != null && price == null) {
-            setPrice(clampSuggested(m));
-          }
-        }
-      } catch (err: any) {
-        console.error("Market error for", card.id, err);
-        if (!cancelled) {
-          setMarket(null);
-          setMarketError("Market price currently unavailable.");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingMarket(false);
-        }
-      }
-    }
-
-    loadMarket();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card.id, foil]);
 
   const suggested = market != null ? clampSuggested(market) : null;
   const lineTotal =
@@ -1030,7 +973,6 @@ function CatalogResultRow({
 
     onStage(item);
 
-    // Toast notification when staging
     notifications.show({
       title: "Staged",
       message: `${card.name} added to staged listings.`,
@@ -1080,14 +1022,14 @@ function CatalogResultRow({
               <Text size="sm">
                 Market{" "}
                 <Text span fw={700}>
-                  {loadingMarket ? "…" : money(market)}
+                  {money(market)}
                 </Text>
               </Text>
 
               <Text size="sm">
                 Suggested{" "}
                 <Text span fw={700}>
-                  {loadingMarket ? "…" : money(suggested)}
+                  {money(suggested)}
                 </Text>
               </Text>
 
@@ -1187,18 +1129,6 @@ function CatalogResultRow({
                 Stage
               </Button>
             </Group>
-
-            {marketError && (
-              <Alert
-                mt="sm"
-                radius="lg"
-                color="yellow"
-                variant="light"
-                icon={<IconAlertTriangle size={16} />}
-              >
-                {marketError}
-              </Alert>
-            )}
           </Box>
         </Group>
       </Group>

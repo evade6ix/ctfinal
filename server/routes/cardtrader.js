@@ -216,16 +216,30 @@ router.post("/products/push-all", async (req, res) => {
         continue;
       }
 
-      const roundedPrice = Math.round(price * 100) / 100;
+            const roundedPrice = Math.round(price * 100) / 100;
       const intQty = Math.floor(qty);
+
+      // Normalize condition + foil once
+      const condition = it.condition || "NM";
+      const isFoil = !!it.foil;
 
       const payload = {
         blueprint_id: blueprintId,
         quantity: intQty,
         price: roundedPrice,
-        condition: it.condition || "NM",
-        foil: !!it.foil,
+
+        // Keep these top-level fields (harmless, may still be used)
+        condition,
+        foil: isFoil,
         language: "en",
+
+        // ✅ CardTrader actually uses editable properties for things like foil
+        // Docs show they store mtg_foil / mtg_language on the product.
+        properties: {
+          condition,           // e.g. "Near Mint"
+          language: "English", // CT maps this to mtg_language: "en"
+          mtg_foil: isFoil,    // 👈 this is the important one for foil
+        },
       };
 
             try {

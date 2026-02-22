@@ -189,11 +189,11 @@ router.post("/products/push-all", async (req, res) => {
     }
 
     const numericRow = Number(row);
-    if (!Number.isFinite(numericRow) || numericRow < 1 || numericRow > 5) {
-      return res
-        .status(400)
-        .json({ error: "row must be a number between 1 and 5" });
-    }
+if (!Number.isFinite(numericRow) || numericRow < 1) {
+  return res
+    .status(400)
+    .json({ error: "row must be a positive number (1 or higher)" });
+}
 
     const results = [];
     let created = 0;

@@ -761,26 +761,28 @@ export function CatalogSearchView() {
                   />
 
                   <NumberInput
-                    label="Row"
-                    value={destRow ?? undefined}
-                    onChange={(v) => {
-                      const num =
-                        typeof v === "number"
-                          ? v
-                          : typeof v === "string"
-                          ? Number(v)
-                          : null;
-                      const row = Number.isFinite(num as number)
-                        ? Math.max(1, Math.min(5, Math.floor(num as number)))
-                        : null;
-                      setDestRow(row);
-                    }}
-                    min={1}
-                    max={5}
-                    step={1}
-                    clampBehavior="strict"
-                    w={80}
-                  />
+  label="Row"
+  value={destRow ?? undefined}
+  onChange={(v) => {
+    const num =
+      typeof v === "number"
+        ? v
+        : typeof v === "string"
+        ? Number(v)
+        : null;
+
+    const row =
+      num != null && Number.isFinite(num as number) && (num as number) > 0
+        ? Math.floor(num as number)
+        : null;
+
+    setDestRow(row);
+  }}
+  min={1}          // ✅ only lower-bound (no max)
+  step={1}
+  clampBehavior="strict"
+  w={80}
+/>
                 </Group>
               </Group>
 

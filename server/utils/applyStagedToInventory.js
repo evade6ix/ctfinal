@@ -10,10 +10,10 @@ export async function applyStagedToInventory(staged, binId, row) {
     throw new Error("applyStagedToInventory: binId is required");
   }
 
-  const numericRow = Number(row);
-  if (!Number.isFinite(numericRow) || numericRow < 1 || numericRow > 5) {
-    throw new Error("applyStagedToInventory: row must be 1–5");
-  }
+ const numericRow = Number(row);
+if (!Number.isFinite(numericRow) || numericRow < 1) {
+  throw new Error("applyStagedToInventory: row must be >= 1");
+}
 
   const qty = Number(staged.quantity) || 0;
   if (qty <= 0) {
@@ -75,16 +75,18 @@ export async function applyStagedToInventory(staged, binId, row) {
   }
 
   // Look for an existing location for THIS bin + row
-  let found = false;
-  for (const loc of inv.locations) {
-    if (String(loc.bin) === String(binObjectId) && loc.row === numericRow) {
-      const currentLocQty = Number(loc.quantity) || 0;
-      loc.quantity = currentLocQty + qty;
-      found = true;
-      break;
-    }
+let found = false;
+for (const loc of inv.locations) {
+  if (
+    String(loc.bin) === String(binObjectId) &&
+    Number(loc.row) === numericRow
+  ) {
+    const currentLocQty = Number(loc.quantity) || 0;
+    loc.quantity = currentLocQty + qty;
+    found = true;
+    break;
   }
-
+}
   // If no matching location, push a new one
   if (!found) {
     inv.locations.push({

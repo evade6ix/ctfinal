@@ -256,10 +256,21 @@ if (!Number.isFinite(numericRow) || numericRow < 1) {
     mtg_foil: isFoil,
   },
 };
-            try {
-        // 1) Push to CardTrader
-const { data } = await api.post("/products", payload);
-created += 1;
+
+console.log("CT PUSH DEBUG >>>", {
+  rawInputCondition: it.condition,
+  normalizedCondition: condition,
+  blueprintId,
+  quantity: intQty,
+  price: roundedPrice,
+  foil: isFoil,
+});
+console.log("CT FINAL PAYLOAD >>>", JSON.stringify(payload, null, 2));
+
+try {
+  // 1) Push to CardTrader
+  const { data } = await api.post("/products", payload);
+  created += 1;
 
 // CardTrader listing/product id (this is what /inventory uses as cardTraderId)
 // Response shape from CT is usually: { result, warnings, resource: { id, ... } }
@@ -282,15 +293,15 @@ console.log("CT /products response:", JSON.stringify(data, null, 2));
           try {
             // ✅ Reuse the SAME helper as /debug/apply so behavior matches
             const stagedForMongo = {
-              cardTraderId,
-              name: it.name || "Unknown",
-              setCode: it.setCode || null,
-              game: it.gameId || it.game || null,
-              condition: it.condition || "NM",
-              isFoil: !!it.foil,
-              quantity: intQty,
-              price: roundedPrice,
-            };
+  cardTraderId,
+  name: it.name || "Unknown",
+  setCode: it.setCode || null,
+  game: it.gameId || it.game || null,
+  condition,
+  isFoil: !!it.foil,
+  quantity: intQty,
+  price: roundedPrice,
+};
 
             await applyStagedToInventory(stagedForMongo, binId, numericRow);
           } catch (dbErr) {
@@ -300,7 +311,16 @@ console.log("CT /products response:", JSON.stringify(data, null, 2));
             });
           }
         }
-      } catch (err) {
+            } catch (err) {
+        console.error("CT CREATE FAILED >>>", {
+          blueprintId,
+          rawInputCondition: it.condition,
+          normalizedCondition: condition,
+          status: err?.response?.status,
+          response: err?.response?.data || null,
+          message: err?.message || null,
+        });
+
         results.push({
           ok: false,
           blueprintId,

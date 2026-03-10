@@ -26,6 +26,17 @@ function ct() {
   });
 }
 
+function normalizeCondition(input) {
+  const raw = String(input || "").trim().toLowerCase();
+
+  if (raw === "nm" || raw === "near mint") return "NM";
+  if (raw === "lp" || raw === "lightly played") return "LP";
+  if (raw === "mp" || raw === "moderately played") return "MP";
+  if (raw === "hp" || raw === "heavily played") return "HP";
+  if (raw === "dmg" || raw === "damaged") return "DMG";
+
+  return "NM";
+}
 // -------------------------
 // Tiny in-memory caches
 // -------------------------
@@ -220,27 +231,22 @@ if (!Number.isFinite(numericRow) || numericRow < 1) {
       const intQty = Math.floor(qty);
 
       // Normalize condition + foil once
-      const condition = it.condition || "NM";
-      const isFoil = !!it.foil;
+          const condition = normalizeCondition(it.condition);
+          const isFoil = !!it.foil;
 
       const payload = {
-        blueprint_id: blueprintId,
-        quantity: intQty,
-        price: roundedPrice,
+  blueprint_id: blueprintId,
+  quantity: intQty,
+  price: roundedPrice,
 
-        // Keep these top-level fields (harmless, may still be used)
-        condition,
-        foil: isFoil,
-        language: "en",
+  condition,
+  foil: isFoil,
+  language: "en",
 
-        // ✅ CardTrader actually uses editable properties for things like foil
-        // Docs show they store mtg_foil / mtg_language on the product.
-        properties: {
-          condition,           // e.g. "Near Mint"
-          language: "English", // CT maps this to mtg_language: "en"
-          mtg_foil: isFoil,    // 👈 this is the important one for foil
-        },
-      };
+  properties: {
+    mtg_foil: isFoil,
+  },
+};
 
             try {
         // 1) Push to CardTrader

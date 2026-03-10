@@ -29,13 +29,23 @@ function ct() {
 function normalizeCondition(input) {
   const raw = String(input || "").trim().toLowerCase();
 
-  if (raw === "nm" || raw === "near mint") return "NM";
-  if (raw === "lp" || raw === "lightly played") return "LP";
-  if (raw === "mp" || raw === "moderately played") return "MP";
-  if (raw === "hp" || raw === "heavily played") return "HP";
-  if (raw === "dmg" || raw === "damaged") return "DMG";
+  if (raw === "m" || raw === "mint") return "Mint";
+  if (raw === "nm" || raw === "near mint") return "Near Mint";
+  if (
+    raw === "lp" ||
+    raw === "lightly played" ||
+    raw === "slightly played"
+  ) {
+    return "Slightly Played";
+  }
+  if (raw === "mp" || raw === "moderately played") {
+    return "Moderately Played";
+  }
+  if (raw === "p" || raw === "played") return "Played";
+  if (raw === "hp" || raw === "heavily played") return "Heavily Played";
+  if (raw === "poor") return "Poor";
 
-  return "NM";
+  return "Near Mint";
 }
 // -------------------------
 // Tiny in-memory caches
@@ -238,16 +248,14 @@ if (!Number.isFinite(numericRow) || numericRow < 1) {
   blueprint_id: blueprintId,
   quantity: intQty,
   price: roundedPrice,
-
-  condition,
-  foil: isFoil,
-  language: "en",
+  error_mode: "strict",
 
   properties: {
+    condition,
+    mtg_language: "en",
     mtg_foil: isFoil,
   },
 };
-
             try {
         // 1) Push to CardTrader
 const { data } = await api.post("/products", payload);

@@ -46,7 +46,6 @@ function listingCondition(listing) {
       ""
   );
 }
-
 async function getMarketPriceForBlueprint(client, blueprintId) {
   const key = String(blueprintId);
   const now = Date.now();
@@ -76,12 +75,7 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
 
     const zeroOnly = arr.filter((x) => {
       if (!x || !x.price || x.price.cents == null) return false;
-
-      return (
-        x.via_cardtrader_zero === true ||
-        x.cardtrader_zero === true ||
-        x.zero === true
-      );
+      return x.user?.can_sell_via_hub === true;
     });
 
     if (!zeroOnly.length) {

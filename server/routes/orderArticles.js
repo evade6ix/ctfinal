@@ -283,8 +283,12 @@ router.get("/:id", async (req, res) => {
         //
         // 🔄 ALREADY ALLOCATED?
         //
-        const existingAlloc = allocationMap.get(ctId);
-        if (existingAlloc) {
+        const existingAlloc = await OrderAllocation.findOne({
+  orderId: orderIdStr,
+  cardTraderId: ctId,
+}).populate("pickedLocations.bin", "name label rows description");
+
+if (existingAlloc) {
           const binLocations = (existingAlloc.pickedLocations || []).map(
             (pl) => ({
               bin:
@@ -352,22 +356,37 @@ router.get("/:id", async (req, res) => {
         await invItem.save();
 
         // Save allocation (start as NOT picked)
-        await new OrderAllocation({
-          orderId: orderIdStr,
-          orderCode: order.code || null,
-          cardTraderId: ctId,
-          requestedQuantity: requestedQty,
-          fulfilledQuantity: fulfilledQty,
-          unfilled,
-          pickedLocations: pickedLocations.map((pl) => ({
-            bin: pl.bin?._id || pl.bin,
-            row: pl.row,
-            quantity: pl.quantity,
-          })),
-          picked: false,
-          pickedAt: null,
-          pickedBy: null,
-        }).save();
+try {
+  await OrderAllocation.updateOne(
+    {
+      orderId: orderIdStr,
+      cardTraderId: ctId,
+    },
+    {
+      $set: {
+        orderCode: order.code || null,
+        requestedQuantity: requestedQty,
+        fulfilledQuantity: fulfilledQty,
+        unfilled,
+        pickedLocations: pickedLocations.map((pl) => ({
+          bin: pl.bin?._id || pl.bin,
+          row: pl.row,
+          quantity: pl.quantity,
+        })),
+        picked: false,
+        pickedAt: null,
+        pickedBy: null,
+      },
+    },
+    { upsert: true }
+  );
+} catch (err) {
+  console.error("❌ Failed to save allocation", {
+    orderId: orderIdStr,
+    cardTraderId: ctId,
+    err: err.message,
+  });
+}
 
         // Build output binLocations
         const binLocations = pickedLocations.map((pl) => ({

@@ -2,6 +2,7 @@
 import express from "express";
 import { OrderAllocation } from "../models/OrderAllocation.js";
 import { ct } from "../ctClient.js";
+import fetch from "node-fetch";
 
 const router = express.Router();
 
@@ -181,7 +182,72 @@ router.post("/cleanup-stale", async (req, res) => {
       .json({ error: "Failed to cleanup stale order allocations" });
   }
 });
+/**
+ * POST /api/order-allocations/rebuild-order/:orderId
+ *
+ * Re-runs allocation reconciliation for a single order by calling
+ * the existing /api/order-articles/:orderId route.
+ *
+ * Safe with current logic because:
+ * - existing allocations are checked per line
+ * - missing allocations can now be upserted
+ */
+router.post("/rebuild-order/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
 
+    if (!orderId) {
+      return res.status(400).json({ error: "orderId is required" });
+    }
+
+    const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${orderId}`;
+    console.log(`🔁 [ORDER-ALLOCATIONS] Rebuilding allocations for order ${orderId} via ${url}`);
+
+    const resp = await fetch(url);
+    const raw = await resp.text().catch(() => "");
+
+    if (!resp.ok) {
+      console.error(
+        "❌ Failed to rebuild order allocations",
+        orderId,
+        resp.status,
+        raw.slice(0, 500)
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to rebuild order allocations",
+        status: resp.status,
+        details: raw.slice(0, 500),
+      });
+    }
+
+    let parsed = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch {
+      parsed = null;
+    }
+
+    const allocationCount = await OrderAllocation.countDocuments({
+      orderId: String(orderId),
+    });
+
+    return res.json({
+      ok: true,
+      orderId: String(orderId),
+      allocationCount,
+      resultCount: Array.isArray(parsed) ? parsed.length : null,
+    });
+  } catch (err) {
+    console.error("❌ Error in POST /api/order-allocations/rebuild-order:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to rebuild order allocations",
+      details: err.message,
+    });
+  }
+});
 export default router;
 
 

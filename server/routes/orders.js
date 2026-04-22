@@ -230,57 +230,49 @@ router.post("/sync", async (req, res) => {
     // 3) Run allocations for ELIGIBLE orders (unchanged)
     // =====================================================
     let triggered = 0;
-    let skippedAlreadyAllocated = 0;
-    let failed = 0;
+let failed = 0;
 
-    for (const o of eligible) {
-      const orderIdStr = String(o.id);
+for (const o of eligible) {
+  const orderIdStr = String(o.id);
 
-      const hasAnyAlloc = await OrderAllocation.exists({ orderId: orderIdStr });
-      if (hasAnyAlloc) {
-        skippedAlreadyAllocated++;
-        continue;
-      }
+  const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}`;
+  console.log(`🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`);
 
-      const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}`;
-      console.log(`🔁 [ORDERS] Allocating order ${orderIdStr} via ${url}`);
+  try {
+    const resp = await fetch(url);
+    const raw = await resp.text().catch(() => "");
 
-      try {
-        const resp = await fetch(url);
-        const raw = await resp.text().catch(() => "");
-
-        if (!resp.ok) {
-          console.error(
-            "❌ Failed to allocate order via order-articles",
-            o.id,
-            resp.status,
-            raw.slice(0, 300)
-          );
-          failed++;
-          continue;
-        }
-
-        triggered++;
-      } catch (err) {
-        console.error(
-          "❌ Error allocating order via order-articles",
-          o.id,
-          err?.message || err
-        );
-        failed++;
-      }
+    if (!resp.ok) {
+      console.error(
+        "❌ Failed to reconcile order via order-articles",
+        o.id,
+        resp.status,
+        raw.slice(0, 300)
+      );
+      failed++;
+      continue;
     }
 
+    triggered++;
+  } catch (err) {
+    console.error(
+      "❌ Error reconciling order via order-articles",
+      o.id,
+      err?.message || err
+    );
+    failed++;
+  }
+}
+
     const summary = {
-      ok: true,
-      fetchedOrders: allOrders.length,
-      eligibleOrders: eligible.length,
-      processedThisRun: triggered + skippedAlreadyAllocated + failed,
-      triggered,
-      skippedAlreadyAllocated,
-      failed,
-      deletedAllocationsCount, // 🧹 include cleanup info
-    };
+  ok: true,
+  fetchedOrders: allOrders.length,
+  eligibleOrders: eligible.length,
+  processedThisRun: triggered + failed,
+  reconciled: triggered,
+  failed,
+  deletedAllocationsCount,
+};
 
     console.log("✅ [ORDERS] sync summary", summary);
     res.json(summary);

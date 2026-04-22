@@ -568,19 +568,18 @@ export function OrdersView() {
                                             </Text>
 
                                             <Group gap={6} mt={6}>
-                                              {(it.binLocations || []).map(
-                                                (b, i) => (
-                                                  <Badge
-                                                    key={i}
-                                                    color="yellow"
-                                                  >
-                                                    {b.bin ?? "?"} / Row{" "}
-                                                    {b.row ?? "?"} (x
-                                                    {b.quantity ?? "?"})
-                                                  </Badge>
-                                                )
-                                              )}
-                                            </Group>
+  {it.binLocations && it.binLocations.length > 0 ? (
+    it.binLocations.map((b, i) => (
+      <Badge key={i} color="yellow">
+        {b.bin ?? "?"} / Row {b.row ?? "?"} (x{b.quantity ?? "?"})
+      </Badge>
+    ))
+  ) : (
+    <Badge color="red" variant="light">
+      Unassigned
+    </Badge>
+  )}
+</Group>
                                           </Box>
 
                                           <Button

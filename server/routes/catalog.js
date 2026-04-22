@@ -26,11 +26,14 @@ const MARKET_TTL_MS = 30 * 1000; // 30 seconds
 const marketCache = new Map();
 
 /**
- * Fetch cheapest listing price for a blueprint (any game).
- * Tries EN first, then falls back to any language.
- * Returns a number in your currency (e.g. 1.23) or null if none.
+ * Fetch cheapest listing prices for a blueprint.
+ * Returns:
+ * {
+ *   market: number | null,      // cheapest overall
+ *   zeroMarket: number | null,  // cheapest ZERO-only
+ * }
  */
-async function getMarketPriceForBlueprint(client, blueprintId) {
+async function getMarketPricesForBlueprint(client, blueprintId) {
   const key = String(blueprintId);
   const now = Date.now();
 
@@ -40,7 +43,6 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
   }
 
   try {
-    // 1) Try English listings first (original behavior)
     let resp = await client.get("/marketplace/products", {
       params: {
         blueprint_id: blueprintId,
@@ -51,12 +53,10 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
     let data = resp.data;
     let arr = data && data[key] ? data[key] : [];
 
-    // 2) If no EN listings, retry without language filter (all languages)
     if (!Array.isArray(arr) || arr.length === 0) {
       const fallbackRes = await client.get("/marketplace/products", {
         params: {
           blueprint_id: blueprintId,
-          // no language param -> all listings
         },
       });
       data = fallbackRes.data;
@@ -64,18 +64,40 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
     }
 
     if (!Array.isArray(arr) || arr.length === 0) {
-      marketCache.set(key, { at: now, value: null });
-      return null;
+      const value = { market: null, zeroMarket: null };
+      marketCache.set(key, { at: now, value });
+      return value;
     }
 
-    const cheapest = arr
-      .filter((x) => x && x.price && x.price.cents != null)
+    const priced = arr.filter(
+      (x) => x && x.price && x.price.cents != null
+    );
+
+    const cheapestOverall = priced
+      .slice()
       .sort((a, b) => a.price.cents - b.price.cents)[0];
 
-    const value =
-      cheapest && cheapest.price && cheapest.price.cents != null
-        ? Number(cheapest.price.cents) / 100
-        : null;
+    const zeroOnly = priced.filter(
+      (x) =>
+        x.via_cardtrader_zero === true ||
+        x.cardtrader_zero === true ||
+        x.zero === true
+    );
+
+    const cheapestZero = zeroOnly
+      .slice()
+      .sort((a, b) => a.price.cents - b.price.cents)[0];
+
+    const value = {
+      market:
+        cheapestOverall && cheapestOverall.price?.cents != null
+          ? Number(cheapestOverall.price.cents) / 100
+          : null,
+      zeroMarket:
+        cheapestZero && cheapestZero.price?.cents != null
+          ? Number(cheapestZero.price.cents) / 100
+          : null,
+    };
 
     marketCache.set(key, { at: now, value });
     return value;
@@ -85,8 +107,9 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
       blueprintId,
       err?.response?.data || err.message
     );
-    marketCache.set(key, { at: now, value: null });
-    return null;
+    const value = { market: null, zeroMarket: null };
+    marketCache.set(key, { at: now, value });
+    return value;
   }
 }
 
@@ -276,17 +299,16 @@ router.post("/search", async (req, res) => {
     const end = start + pageSize;
     const slice = filtered.slice(start, end);
 
-    // Enrich page slice with market price (any game, not just Magic)
     const items = await Promise.all(
-      slice.map(async (bp) => {
-        const market = await getMarketPriceForBlueprint(client, bp.id);
-        return {
-          ...bp,
-          market, // number | null
-        };
-      })
-    );
-
+  slice.map(async (bp) => {
+    const prices = await getMarketPricesForBlueprint(client, bp.id);
+    return {
+      ...bp,
+      market: prices.market,
+      zeroMarket: prices.zeroMarket,
+    };
+  })
+);
     res.json({
       items,
       total,

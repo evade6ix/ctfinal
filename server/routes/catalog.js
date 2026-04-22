@@ -47,13 +47,8 @@ function listingCondition(listing) {
   );
 }
 
-/**
- * Fetch the LOWEST ZERO listing in ENGLISH for the selected condition.
- * Returns a number or null.
- */
-async function getMarketPriceForBlueprint(client, blueprintId, condition) {
-  const normalizedCondition = normalizeCondition(condition);
-  const key = `${String(blueprintId)}::${normalizedCondition}`;
+async function getMarketPriceForBlueprint(client, blueprintId) {
+  const key = String(blueprintId);
   const now = Date.now();
 
   const cached = marketCache.get(key);
@@ -79,24 +74,22 @@ async function getMarketPriceForBlueprint(client, blueprintId, condition) {
       return null;
     }
 
-    const filtered = arr.filter((x) => {
+    const zeroOnly = arr.filter((x) => {
       if (!x || !x.price || x.price.cents == null) return false;
-      if (!listingIsZero(x)) return false;
 
-      // If client sent a condition, require exact match
-      if (normalizedCondition) {
-        return listingCondition(x) === normalizedCondition;
-      }
-
-      return true;
+      return (
+        x.via_cardtrader_zero === true ||
+        x.cardtrader_zero === true ||
+        x.zero === true
+      );
     });
 
-    if (!filtered.length) {
+    if (!zeroOnly.length) {
       marketCache.set(key, { at: now, value: null });
       return null;
     }
 
-    const cheapest = filtered
+    const cheapest = zeroOnly
       .slice()
       .sort((a, b) => Number(a.price.cents) - Number(b.price.cents))[0];
 
@@ -198,14 +191,13 @@ router.get("/sets", async (req, res) => {
 // market = LOWEST ZERO ENGLISH listing for selected condition
 // =======================
 router.post("/search", async (req, res) => {
-  let { gameId, setIds, query, page, pageSize, condition } = req.body || {};
+  let { gameId, setIds, query, page, pageSize } = req.body || {};
 
   gameId = Number(gameId);
   page = Number(page) || 1;
   pageSize = Number(pageSize) || 50;
   if (!Array.isArray(setIds)) setIds = [];
   const trimmedQuery = (query || "").toString().trim().toLowerCase();
-  const normalizedCondition = normalizeCondition(condition);
 
   if (!gameId) {
     return res.status(400).json({ error: "Missing or invalid gameId" });
@@ -286,20 +278,15 @@ router.post("/search", async (req, res) => {
     const slice = filtered.slice(start, end);
 
     const items = await Promise.all(
-      slice.map(async (bp) => {
-        const market = await getMarketPriceForBlueprint(
-          client,
-          bp.id,
-          normalizedCondition
-        );
+  slice.map(async (bp) => {
+    const market = await getMarketPriceForBlueprint(client, bp.id);
 
-        return {
-          ...bp,
-          market,
-        };
-      })
-    );
-
+    return {
+      ...bp,
+      market,
+    };
+  })
+);
     res.json({
       items,
       total,

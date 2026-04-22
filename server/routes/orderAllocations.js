@@ -2,8 +2,6 @@
 import express from "express";
 import { OrderAllocation } from "../models/OrderAllocation.js";
 import { ct } from "../ctClient.js";
-import fetch from "node-fetch";
-
 const router = express.Router();
 
 /**

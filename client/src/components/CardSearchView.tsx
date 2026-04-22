@@ -98,12 +98,13 @@ export function CatalogSearchView() {
 
 
   const [sets, setSets] = useState<SetOption[]>([]);
-  const [selectedSetIds, setSelectedSetIds] = useState<string[]>([]);
+const [selectedSetIds, setSelectedSetIds] = useState<string[]>([]);
 
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+const [query, setQuery] = useState("");
+const [page, setPage] = useState(1);
+const [searchCondition, setSearchCondition] = useState<"NM" | "LP" | "MP" | "HP">("NM");
 
-  const [loadingGames, setLoadingGames] = useState(false);
+const [loadingGames, setLoadingGames] = useState(false);
   const [loadingSets, setLoadingSets] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
 
@@ -251,14 +252,14 @@ export function CatalogSearchView() {
     setError(null);
     setHasSearched(true);
 
-    try {
-      const body = {
-        gameId,
-        setIds: selectedSetIds,
-        query: query.trim() || null,
-        page: pageToUse,
-        pageSize: PAGE_SIZE,
-      };
+    const body = {
+  gameId,
+  setIds: selectedSetIds,
+  query: query.trim() || null,
+  page: pageToUse,
+  pageSize: PAGE_SIZE,
+  condition: searchCondition,
+};
 
       const res = await fetch("/api/catalog/search", {
         method: "POST",
@@ -576,27 +577,43 @@ export function CatalogSearchView() {
               />
             </Group>
 
-            <Group align="flex-end" gap="sm" wrap="wrap" mt="sm">
-              <TextInput
-                label="Card name (optional)"
-                placeholder="Ragavan, Nimble Pilferer"
-                value={query}
-                onChange={(e) => setQuery(e.currentTarget.value)}
-                leftSection={<IconSearch size={18} />}
-                style={{ flex: 1, minWidth: "260px" }}
-              />
-              <Button
-                type="submit"
-                disabled={
-                  !gameId || selectedSetIds.length === 0 || loadingSearch
-                }
-                leftSection={
-                  !loadingSearch ? <IconSearch size={18} /> : undefined
-                }
-              >
-                {loadingSearch ? <Loader size="xs" /> : "Search"}
-              </Button>
-            </Group>
+           <Group align="flex-end" gap="sm" wrap="wrap" mt="sm">
+  <TextInput
+    label="Card name (optional)"
+    placeholder="Ragavan, Nimble Pilferer"
+    value={query}
+    onChange={(e) => setQuery(e.currentTarget.value)}
+    leftSection={<IconSearch size={18} />}
+    style={{ flex: 1, minWidth: "260px" }}
+  />
+
+  <Select
+    label="Condition"
+    data={[
+      { value: "NM", label: "NM" },
+      { value: "LP", label: "LP" },
+      { value: "MP", label: "MP" },
+      { value: "HP", label: "HP" },
+    ]}
+    value={searchCondition}
+    onChange={(val) =>
+      setSearchCondition((val as "NM" | "LP" | "MP" | "HP") || "NM")
+    }
+    w={120}
+  />
+
+  <Button
+    type="submit"
+    disabled={
+      !gameId || selectedSetIds.length === 0 || loadingSearch
+    }
+    leftSection={
+      !loadingSearch ? <IconSearch size={18} /> : undefined
+    }
+  >
+    {loadingSearch ? <Loader size="xs" /> : "Search"}
+  </Button>
+</Group>
           </Box>
         </form>
       </Paper>

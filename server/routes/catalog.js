@@ -22,19 +22,38 @@ function ct() {
 // Tiny market-price cache
 // =======================
 const MARKET_TTL_MS = 30 * 1000; // 30 seconds
-// key: blueprintId -> { at, value }
+// key: blueprintId::condition -> { at, value }
 const marketCache = new Map();
 
+function normalizeCondition(value) {
+  return (value || "").toString().trim().toUpperCase();
+}
+
+function listingIsZero(listing) {
+  return (
+    listing?.via_cardtrader_zero === true ||
+    listing?.cardtrader_zero === true ||
+    listing?.zero === true
+  );
+}
+
+function listingCondition(listing) {
+  return normalizeCondition(
+    listing?.properties?.condition ||
+      listing?.condition ||
+      listing?.card_condition ||
+      listing?.grading ||
+      ""
+  );
+}
+
 /**
- * Fetch cheapest listing prices for a blueprint.
- * Returns:
- * {
- *   market: number | null,      // cheapest overall
- *   zeroMarket: number | null,  // cheapest ZERO-only
- * }
+ * Fetch the LOWEST ZERO listing in ENGLISH for the selected condition.
+ * Returns a number or null.
  */
-async function getMarketPricesForBlueprint(client, blueprintId) {
-  const key = String(blueprintId);
+async function getMarketPriceForBlueprint(client, blueprintId, condition) {
+  const normalizedCondition = normalizeCondition(condition);
+  const key = `${String(blueprintId)}::${normalizedCondition}`;
   const now = Date.now();
 
   const cached = marketCache.get(key);
@@ -43,73 +62,59 @@ async function getMarketPricesForBlueprint(client, blueprintId) {
   }
 
   try {
-    let resp = await client.get("/marketplace/products", {
+    const resp = await client.get("/marketplace/products", {
       params: {
         blueprint_id: blueprintId,
         language: "en",
       },
     });
 
-    let data = resp.data;
-    let arr = data && data[key] ? data[key] : [];
+    const data = resp.data || {};
+    const arr = Array.isArray(data[String(blueprintId)])
+      ? data[String(blueprintId)]
+      : [];
 
-    if (!Array.isArray(arr) || arr.length === 0) {
-      const fallbackRes = await client.get("/marketplace/products", {
-        params: {
-          blueprint_id: blueprintId,
-        },
-      });
-      data = fallbackRes.data;
-      arr = data && data[key] ? data[key] : [];
+    if (!arr.length) {
+      marketCache.set(key, { at: now, value: null });
+      return null;
     }
 
-    if (!Array.isArray(arr) || arr.length === 0) {
-      const value = { market: null, zeroMarket: null };
-      marketCache.set(key, { at: now, value });
-      return value;
+    const filtered = arr.filter((x) => {
+      if (!x || !x.price || x.price.cents == null) return false;
+      if (!listingIsZero(x)) return false;
+
+      // If client sent a condition, require exact match
+      if (normalizedCondition) {
+        return listingCondition(x) === normalizedCondition;
+      }
+
+      return true;
+    });
+
+    if (!filtered.length) {
+      marketCache.set(key, { at: now, value: null });
+      return null;
     }
 
-    const priced = arr.filter(
-      (x) => x && x.price && x.price.cents != null
-    );
-
-    const cheapestOverall = priced
+    const cheapest = filtered
       .slice()
-      .sort((a, b) => a.price.cents - b.price.cents)[0];
+      .sort((a, b) => Number(a.price.cents) - Number(b.price.cents))[0];
 
-    const zeroOnly = priced.filter(
-      (x) =>
-        x.via_cardtrader_zero === true ||
-        x.cardtrader_zero === true ||
-        x.zero === true
-    );
-
-    const cheapestZero = zeroOnly
-      .slice()
-      .sort((a, b) => a.price.cents - b.price.cents)[0];
-
-    const value = {
-      market:
-        cheapestOverall && cheapestOverall.price?.cents != null
-          ? Number(cheapestOverall.price.cents) / 100
-          : null,
-      zeroMarket:
-        cheapestZero && cheapestZero.price?.cents != null
-          ? Number(cheapestZero.price.cents) / 100
-          : null,
-    };
+    const value =
+      cheapest && cheapest.price && cheapest.price.cents != null
+        ? Number(cheapest.price.cents) / 100
+        : null;
 
     marketCache.set(key, { at: now, value });
     return value;
   } catch (err) {
     console.error(
-      "Error fetching market for blueprint",
+      "Error fetching ZERO EN market for blueprint",
       blueprintId,
       err?.response?.data || err.message
     );
-    const value = { market: null, zeroMarket: null };
-    marketCache.set(key, { at: now, value });
-    return value;
+    marketCache.set(key, { at: now, value: null });
+    return null;
   }
 }
 
@@ -121,24 +126,11 @@ router.get("/games", async (req, res) => {
     const client = ct();
     const { data } = await client.get("/games");
 
-    console.log(
-      "CardTrader /games raw response type:",
-      typeof data,
-      "isArray:",
-      Array.isArray(data)
-    );
-    console.log("CardTrader /games raw response value:", data);
-
-    // CardTrader is returning { array: [...] } in some environments
     const arr = Array.isArray(data)
       ? data
       : Array.isArray(data && data.array)
       ? data.array
       : [];
-
-    if (arr.length === 0) {
-      console.warn("CardTrader /games had no array data.");
-    }
 
     const games = arr.map((g) => ({
       id: g.id,
@@ -159,7 +151,6 @@ router.get("/games", async (req, res) => {
 
 // =======================
 // GET /api/catalog/sets?gameId=1
-// (expansions for a game)
 // =======================
 router.get("/sets", async (req, res) => {
   const gameId = Number(req.query.gameId);
@@ -202,17 +193,19 @@ router.get("/sets", async (req, res) => {
 
 // =======================
 // POST /api/catalog/search
-// Body: { gameId, setIds: [expansionId], query, page, pageSize }
+// Body: { gameId, setIds: [expansionId], query, page, pageSize, condition }
 // Returns CardTrader blueprints WITH market price
+// market = LOWEST ZERO ENGLISH listing for selected condition
 // =======================
 router.post("/search", async (req, res) => {
-  let { gameId, setIds, query, page, pageSize } = req.body || {};
+  let { gameId, setIds, query, page, pageSize, condition } = req.body || {};
 
   gameId = Number(gameId);
   page = Number(page) || 1;
   pageSize = Number(pageSize) || 50;
   if (!Array.isArray(setIds)) setIds = [];
   const trimmedQuery = (query || "").toString().trim().toLowerCase();
+  const normalizedCondition = normalizeCondition(condition);
 
   if (!gameId) {
     return res.status(400).json({ error: "Missing or invalid gameId" });
@@ -227,7 +220,6 @@ router.post("/search", async (req, res) => {
   try {
     const client = ct();
 
-    // Pull expansions once so we can decorate results with set code/name
     const { data: expData } = await client.get("/expansions");
     const expArr = Array.isArray(expData)
       ? expData
@@ -235,13 +227,10 @@ router.post("/search", async (req, res) => {
       ? expData.expansions
       : [];
 
-    const expansionsById = new Map(
-      expArr.map((exp) => [exp.id, exp])
-    );
+    const expansionsById = new Map(expArr.map((exp) => [exp.id, exp]));
 
     const allBlueprints = [];
 
-    // Loop through chosen expansions and hit /blueprints/export for each
     for (const expansionIdRaw of setIds) {
       const expansionId = Number(expansionIdRaw);
       if (!expansionId) continue;
@@ -276,17 +265,14 @@ router.post("/search", async (req, res) => {
       }
     }
 
-    // Filter by gameId (extra safety)
     let filtered = allBlueprints.filter((bp) => bp.gameId === gameId);
 
-    // Optional name filter
     if (trimmedQuery) {
-      filtered = filtered.filter((bp) =>
-        bp.name && bp.name.toLowerCase().includes(trimmedQuery)
+      filtered = filtered.filter(
+        (bp) => bp.name && bp.name.toLowerCase().includes(trimmedQuery)
       );
     }
 
-    // Sort by set code then card name
     filtered.sort((a, b) => {
       if ((a.setCode || "") === (b.setCode || "")) {
         return (a.name || "").localeCompare(b.name || "");
@@ -300,15 +286,20 @@ router.post("/search", async (req, res) => {
     const slice = filtered.slice(start, end);
 
     const items = await Promise.all(
-  slice.map(async (bp) => {
-    const prices = await getMarketPricesForBlueprint(client, bp.id);
-    return {
-      ...bp,
-      market: prices.market,
-      zeroMarket: prices.zeroMarket,
-    };
-  })
-);
+      slice.map(async (bp) => {
+        const market = await getMarketPriceForBlueprint(
+          client,
+          bp.id,
+          normalizedCondition
+        );
+
+        return {
+          ...bp,
+          market,
+        };
+      })
+    );
+
     res.json({
       items,
       total,

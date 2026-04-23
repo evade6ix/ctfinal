@@ -49,12 +49,15 @@ type OrderItem = {
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  image_url?: string; // from /api/order-articles
-  imageUrl?: string; // future /api/orders usage if we wire it
+  image_url?: string;
+  imageUrl?: string;
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
-};
 
+  // 👇 ADD THIS
+  isFoil?: boolean;
+  condition?: string | null;
+};
 type AllocationPickState = {
   orderId: string;
   cardTraderId: number;
@@ -557,11 +560,27 @@ export function OrdersView() {
 
                                           <Box style={{ flex: 1 }}>
                                             <Text fw={500}>
-                                              {it.name || "No name"}
-                                            </Text>
-                                            <Text size="xs" c="dimmed">
-                                              {it.set_name || "Unknown set"}
-                                            </Text>
+  {it.name || "No name"}
+</Text>
+<Text size="xs" c="dimmed">
+  {it.set_name || "Unknown set"}
+</Text>
+
+<Group gap={6} mt={6}>
+  <Badge
+    size="sm"
+    color={it.isFoil ? "yellow" : "gray"}
+    variant={it.isFoil ? "filled" : "light"}
+  >
+    {it.isFoil ? "Foil" : "Non-Foil"}
+  </Badge>
+
+  {it.condition && (
+    <Badge size="sm" variant="light" color="blue">
+      {it.condition}
+    </Badge>
+  )}
+</Group>
 
                                             <Text size="sm" mt={4}>
                                               Qty: {it.quantity ?? "?"}

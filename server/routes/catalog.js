@@ -275,13 +275,60 @@ router.post("/search", async (req, res) => {
   slice.map(async (bp) => {
     const market = await getMarketPriceForBlueprint(client, bp.id);
 
+    let rarity = null;
+    let edition = null;
+    let finish = null;
+
+    try {
+      const resp = await client.get("/marketplace/products", {
+        params: {
+          blueprint_id: bp.id,
+          language: "en",
+        },
+      });
+
+      const arr = Array.isArray(resp.data[String(bp.id)])
+        ? resp.data[String(bp.id)]
+        : [];
+
+      if (arr.length) {
+        const first = arr[0];
+        const p = first?.properties || {};
+
+        rarity =
+          p.yugioh_rarity ||
+          p.rarity ||
+          p.mtg_rarity ||
+          null;
+
+        edition =
+          p.edition ||
+          p.yugioh_edition ||
+          null;
+
+        finish =
+          typeof p.foil === "boolean"
+            ? p.foil
+              ? "Foil"
+              : null
+            : p.finish ||
+              p.foiling ||
+              p.yugioh_foil ||
+              null;
+      }
+    } catch (e) {
+      // ignore — fallback to null
+    }
+
     return {
       ...bp,
       market,
+      rarity,
+      edition,
+      finish,
     };
   })
-);
-    res.json({
+);res.json({
       items,
       total,
       page,

@@ -44,6 +44,18 @@ const orderAllocationSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ✅ NEW: snapshot data from the CT order line
+    name: {
+      type: String,
+    },
+    condition: {
+      type: String,
+    },
+    isFoil: {
+      type: Boolean,
+      default: false,
+    },
+
     // How many the order line requested in total
     requestedQuantity: {
       type: Number,

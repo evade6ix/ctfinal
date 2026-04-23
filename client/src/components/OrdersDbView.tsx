@@ -20,6 +20,10 @@ type OrderLine = {
   setCode?: string;
   quantity: number;
   price?: number;
+
+  // optional future-proofing
+  isFoil?: boolean;
+  condition?: string | null;
 };
 
 type Order = {

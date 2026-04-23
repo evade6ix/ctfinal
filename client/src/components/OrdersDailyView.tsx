@@ -28,7 +28,6 @@ type OrderSummary = {
   sellerTotalCurrency?: string | null;
 };
 
-// Line item coming back from /api/orders and /api/order-articles/:id
 type OrderItem = {
   id?: number;
   cardTraderId?: number;
@@ -44,6 +43,10 @@ type OrderItem = {
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
+
+  // 👇 NEW
+  isFoil?: boolean;
+  condition?: string | null;
 };
 
 type DailySummary = {
@@ -60,7 +63,6 @@ type DailyAllocationRef = {
   picked?: boolean;
 };
 
-// Aggregated daily picking line
 type DailyLine = {
   date: string;
   name: string;
@@ -70,6 +72,10 @@ type DailyLine = {
   row?: number;
   quantity: number;
   image_url?: string;
+
+  // 👇 NEW
+  isFoil?: boolean;
+  condition?: string | null;
 
   // 👇 which allocations this line represents
   allocations: DailyAllocationRef[];
@@ -309,24 +315,31 @@ export function OrdersDailyView() {
                 const binLabel = (loc.bin ?? "(unassigned)").toString();
                 const rowVal = loc.row;
 
-                const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}`;
+                const foilKey = it.isFoil ? "foil" : "nonfoil";
+const conditionKey = it.condition || "";
+const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${conditionKey}`;
 
                 if (!bucket[key]) {
-                  bucket[key] = {
-                    date: dateKey,
-                    name,
-                    set_name: setName,
-                    setCode,
-                    bin: binLabel,
-                    row: typeof rowVal === "number" ? rowVal : undefined,
-                    quantity: 0,
-                    image_url: it.image_url, // initial image (usually empty now)
-                    allocations: [],
-                    totalAllocations: 0,
-                    pickedAllocations: 0,
-                    groupKey: key,
-                  };
-                }
+  bucket[key] = {
+    date: dateKey,
+    name,
+    set_name: setName,
+    setCode,
+    bin: binLabel,
+    row: typeof rowVal === "number" ? rowVal : undefined,
+    quantity: 0,
+    image_url: it.image_url, // initial image (usually empty now)
+
+    // 👇 NEW
+    isFoil: it.isFoil,
+    condition: it.condition ?? null,
+
+    allocations: [],
+    totalAllocations: 0,
+    pickedAllocations: 0,
+    groupKey: key,
+  };
+}
 
                 const line = bucket[key];
 
@@ -592,19 +605,21 @@ export function OrdersDailyView() {
                   <Table striped highlightOnHover withColumnBorders>
                     <Table.Thead>
                       <Table.Tr>
-                        <Table.Th>Bin</Table.Th>
-                        <Table.Th>Row</Table.Th>
-                        <Table.Th>Set</Table.Th>
-                        <Table.Th>Card</Table.Th>
-                        <Table.Th>Qty</Table.Th>
-                        <Table.Th>Picked</Table.Th>
-                        <Table.Th>Image</Table.Th>
-                      </Table.Tr>
+  <Table.Th>Bin</Table.Th>
+  <Table.Th>Row</Table.Th>
+  <Table.Th>Set</Table.Th>
+  <Table.Th>Card</Table.Th>
+  <Table.Th>Foil</Table.Th>
+  <Table.Th>Condition</Table.Th>
+  <Table.Th>Qty</Table.Th>
+  <Table.Th>Picked</Table.Th>
+  <Table.Th>Image</Table.Th>
+</Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
                       {lines.length === 0 && (
                         <Table.Tr>
-                          <Table.Td colSpan={7}>
+                          <Table.Td colSpan={9}>
                             <Text c="dimmed" size="sm">
                               No line items found for this day yet.
                             </Text>
@@ -634,11 +649,23 @@ export function OrdersDailyView() {
                               </Text>
                             </Table.Td>
                             <Table.Td>
-                              <Text>{line.name}</Text>
-                            </Table.Td>
-                            <Table.Td>
-                              <Text>{line.quantity}</Text>
-                            </Table.Td>
+  <Text>{line.name}</Text>
+</Table.Td>
+<Table.Td>
+  <Badge
+    size="sm"
+    color={line.isFoil ? "yellow" : "gray"}
+    variant={line.isFoil ? "filled" : "light"}
+  >
+    {line.isFoil ? "Foil" : "Non-Foil"}
+  </Badge>
+</Table.Td>
+<Table.Td>
+  <Text>{line.condition || "-"}</Text>
+</Table.Td>
+<Table.Td>
+  <Text>{line.quantity}</Text>
+</Table.Td>
                             <Table.Td>
                               <Stack gap={4}>
                                 <Text size="xs" c="dimmed">

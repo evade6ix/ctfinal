@@ -49,19 +49,12 @@ async function getScryfallImage(cardName) {
 
     return null;
   } catch (e) {
-    // 🔇 In production, stay quiet to avoid log spam on Railway
     if (process.env.NODE_ENV !== "production") {
       console.warn("⚠️ Scryfall lookup failed for", cardName);
     }
     return null;
   }
 }
-
-
-
-
-
-
 
 /**
  * Wrapper: Scryfall lookup with per-request limit + cache
@@ -72,19 +65,16 @@ async function getScryfallImageLimited(cardName, ctx) {
 
   const key = String(cardName).toLowerCase();
 
-  // 1) Cache hit
   if (scryfallCache.has(key)) {
     return scryfallCache.get(key);
   }
 
-  // 2) Hit per-request cap → no more Scryfall calls
   if (ctx.lookups >= MAX_SCRYFALL_LOOKUPS_PER_REQUEST) {
     return null;
   }
 
   ctx.lookups++;
 
-  // 3) Actual Scryfall fetch
   const url = await getScryfallImage(cardName);
   if (url) {
     scryfallCache.set(key, url);
@@ -93,8 +83,31 @@ async function getScryfallImageLimited(cardName, ctx) {
   return url;
 }
 
+/**
+ * Best-effort foil normalization from CardTrader line item shape
+ */
+function extractIsFoil(item) {
+  return (
+    item?.foil === true ||
+    item?.is_foil === true ||
+    item?.attributes?.foil === true ||
+    item?.properties?.foil === true ||
+    false
+  );
+}
 
-
+/**
+ * Best-effort condition normalization from CardTrader line item shape
+ */
+function extractCondition(item) {
+  return (
+    item?.condition ||
+    item?.card_condition ||
+    item?.attributes?.condition ||
+    item?.properties?.condition ||
+    null
+  );
+}
 
 /**
  * GET /api/order-articles/image?name=Card+Name
@@ -111,12 +124,10 @@ router.get("/image", async (req, res) => {
 
     const key = name.toLowerCase();
 
-    // 1) Check cache first
     if (scryfallCache.has(key)) {
       return res.json({ image_url: scryfallCache.get(key) });
     }
 
-    // 2) Direct Scryfall lookup
     const url = await getScryfallImage(name);
 
     if (url) {
@@ -124,7 +135,7 @@ router.get("/image", async (req, res) => {
     }
 
     return res.json({ image_url: url });
-    } catch (err) {
+  } catch (err) {
     if (process.env.NODE_ENV !== "production") {
       console.error("❌ /api/order-articles/image error:", err.message || err);
     }
@@ -134,9 +145,6 @@ router.get("/image", async (req, res) => {
   }
 });
 
-
-
-
 /**
  * GET /api/order-articles/:id
  * Returns normalized line items for an order, including:
@@ -145,6 +153,7 @@ router.get("/image", async (req, res) => {
  * - Scryfall image_url
  * - binLocations (from allocations / live allocation)
  * - picked / pickedAt / pickedBy (from OrderAllocation, if present)
+ * - isFoil / condition
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -180,42 +189,44 @@ router.get("/:id", async (req, res) => {
     const baseItems = rawItems.map((a) => ({
       id: a.id,
       cardTraderId: a.product_id ?? null, // CT listing / product id
-      blueprintId: a.blueprint_id ?? null, // CT blueprint id (like Catalog uses)
+      blueprintId: a.blueprint_id ?? null, // CT blueprint id
       name: a.name || "Unknown item",
       quantity: a.quantity ?? 0,
       set_name: a.expansion || null,
-      image_url: null, // will be filled with Scryfall
+      image_url: null,
       binLocations: [],
-      // picked fields will be added below
+      isFoil: extractIsFoil(a),
+      condition: extractCondition(a),
     }));
 
     if (!baseItems.length) return res.json([]);
 
-    // 4️⃣ Gather CT IDs (for bins / allocations)
+    // 4️⃣ Gather CT IDs
     const ctIds = baseItems
       .map((i) => i.cardTraderId)
       .filter((x) => x != null);
 
-    // Edge case: if we truly have NO CT IDs, we can *only* do Scryfall images,
-    // and we can't allocate bins anyway.
+    // If no CT IDs, only images are possible
     if (!ctIds.length) {
-      // per-request context for Scryfall limits
       const ctx = { lookups: 0 };
 
       const finalNoCT = await Promise.all(
         baseItems.map(async (it) => ({
           ...it,
-          image_url: skipImages ? null : await getScryfallImageLimited(it.name, ctx),
+          image_url: skipImages
+            ? null
+            : await getScryfallImageLimited(it.name, ctx),
           binLocations: [],
           picked: false,
           pickedAt: null,
           pickedBy: null,
         }))
       );
+
       return res.json(finalNoCT);
     }
 
-    // 5️⃣ Inventory items for these CT listing IDs (for bins)
+    // 5️⃣ Inventory items for these CT listing IDs
     const dbItems = await InventoryItem.find({
       cardTraderId: { $in: ctIds },
     })
@@ -240,10 +251,9 @@ router.get("/:id", async (req, res) => {
       allocationMap.set(Number(alloc.cardTraderId), alloc);
     }
 
-    // 🔁 Per-request Scryfall context (resets on each order call)
     const ctx = { lookups: 0 };
 
-    // 7️⃣ Build final lines (Scryfall images + bins + picked state)
+    // 7️⃣ Build final lines
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
@@ -253,21 +263,20 @@ router.get("/:id", async (req, res) => {
           ? inventoryMap.get(ctId)
           : null;
 
-        // Decide blueprintId first – prefer Mongo, then fall back to CT id
+        const existingAlloc = Number.isFinite(ctId)
+          ? allocationMap.get(ctId)
+          : null;
+
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
             ? invItem.blueprintId
-            : it.cardTraderId ?? null;
+            : it.blueprintId ?? null;
 
-        // 💥 IMAGE LOGIC — Scryfall ONLY, but capped + cached 💥
         let image_url = null;
         if (!skipImages) {
           image_url = await getScryfallImageLimited(it.name, ctx);
         }
 
-        //
-        // 🧱 VALIDATE ITEM
-        //
         if (!Number.isFinite(ctId) || requestedQty <= 0) {
           return {
             ...it,
@@ -280,15 +289,8 @@ router.get("/:id", async (req, res) => {
           };
         }
 
-        //
-        // 🔄 ALREADY ALLOCATED?
-        //
-        const existingAlloc = await OrderAllocation.findOne({
-  orderId: orderIdStr,
-  cardTraderId: ctId,
-}).populate("pickedLocations.bin", "name label rows description");
-
-if (existingAlloc) {
+        // Already allocated: return stored allocation snapshot
+        if (existingAlloc) {
           const binLocations = (existingAlloc.pickedLocations || []).map(
             (pl) => ({
               bin:
@@ -306,15 +308,16 @@ if (existingAlloc) {
             blueprintId: resolvedBlueprintId,
             image_url,
             binLocations,
+            name: existingAlloc.name || it.name,
+            condition: existingAlloc.condition ?? it.condition ?? null,
+            isFoil: existingAlloc.isFoil ?? it.isFoil ?? false,
             picked: !!existingAlloc.picked,
             pickedAt: existingAlloc.pickedAt || null,
             pickedBy: existingAlloc.pickedBy || null,
           };
         }
 
-        //
-        // 🔄 NEED TO ALLOCATE NOW
-        //
+        // Need to allocate now
         if (!invItem || !Array.isArray(invItem.locations)) {
           return {
             ...it,
@@ -355,40 +358,42 @@ if (existingAlloc) {
         );
         await invItem.save();
 
-        // Save allocation (start as NOT picked)
-try {
-  await OrderAllocation.updateOne(
-    {
-      orderId: orderIdStr,
-      cardTraderId: ctId,
-    },
-    {
-      $set: {
-        orderCode: order.code || null,
-        requestedQuantity: requestedQty,
-        fulfilledQuantity: fulfilledQty,
-        unfilled,
-        pickedLocations: pickedLocations.map((pl) => ({
-          bin: pl.bin?._id || pl.bin,
-          row: pl.row,
-          quantity: pl.quantity,
-        })),
-        picked: false,
-        pickedAt: null,
-        pickedBy: null,
-      },
-    },
-    { upsert: true }
-  );
-} catch (err) {
-  console.error("❌ Failed to save allocation", {
-    orderId: orderIdStr,
-    cardTraderId: ctId,
-    err: err.message,
-  });
-}
+        // Save allocation snapshot
+        try {
+          await OrderAllocation.updateOne(
+            {
+              orderId: orderIdStr,
+              cardTraderId: ctId,
+            },
+            {
+              $set: {
+                orderCode: order.code || null,
+                requestedQuantity: requestedQty,
+                fulfilledQuantity: fulfilledQty,
+                unfilled,
+                name: it.name,
+                condition: it.condition,
+                isFoil: it.isFoil,
+                pickedLocations: pickedLocations.map((pl) => ({
+                  bin: pl.bin?._id || pl.bin,
+                  row: pl.row,
+                  quantity: pl.quantity,
+                })),
+                picked: false,
+                pickedAt: null,
+                pickedBy: null,
+              },
+            },
+            { upsert: true }
+          );
+        } catch (err) {
+          console.error("❌ Failed to save allocation", {
+            orderId: orderIdStr,
+            cardTraderId: ctId,
+            err: err.message,
+          });
+        }
 
-        // Build output binLocations
         const binLocations = pickedLocations.map((pl) => ({
           bin:
             (pl.bin && (pl.bin.label || pl.bin.name)) ||

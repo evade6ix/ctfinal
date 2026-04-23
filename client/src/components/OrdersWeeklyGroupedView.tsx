@@ -42,6 +42,10 @@ type OrderItem = {
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
+
+  // NEW
+  isFoil?: boolean;
+  condition?: string | null;
 };
 
 type FilterMode = "all" | "picked" | "unpicked";
@@ -614,16 +618,15 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                     return (
                                       <Stack gap="md">
                                         {visibleItems.map((it) => {
-                                          const isPicked = !!it.picked;
-                                          const key = `${o.id}-${it.cardTraderId}`;
-                                          const originalIndex =
-                                            allItems.indexOf(it);
-                                          const isBusy =
-                                            pickingKey ===
-                                            `${o.id}-${
-                                              it.cardTraderId ??
-                                              `idx-${originalIndex}`
-                                            }`;
+  const isPicked = !!it.picked;
+  const originalIndex = allItems.indexOf(it);
+  const key = `${o.id}-${it.cardTraderId ?? `idx-${originalIndex}`}`;
+  const isBusy =
+    pickingKey ===
+    `${o.id}-${
+      it.cardTraderId ??
+      `idx-${originalIndex}`
+    }`;
 
                                           return (
                                             <Group
@@ -703,39 +706,42 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                   wrap="nowrap"
                                                 >
                                                   <Box style={{ flex: 1 }}>
-                                                    <Text fw={500}>
-                                                      {it.name || "No name"}
-                                                    </Text>
-                                                    <Text
-                                                      size="xs"
-                                                      c="dimmed"
-                                                    >
-                                                      {it.set_name ||
-                                                        "Unknown set"}
-                                                    </Text>
+  <Text fw={500}>
+    {it.name || "No name"}
+  </Text>
+  <Text size="xs" c="dimmed">
+    {it.set_name || "Unknown set"}
+  </Text>
 
-                                                    <Text size="sm" mt={4}>
-                                                      Qty:{" "}
-                                                      {it.quantity ?? "?"}
-                                                    </Text>
+  <Group gap={6} mt={6}>
+    <Badge
+      size="sm"
+      color={it.isFoil ? "yellow" : "gray"}
+      variant={it.isFoil ? "filled" : "light"}
+    >
+      {it.isFoil ? "Foil" : "Non-Foil"}
+    </Badge>
 
-                                                    {/* BIN LOCATIONS */}
-                                                    <Group gap={6} mt={6}>
-                                                      {(
-                                                        it.binLocations ||
-                                                        []
-                                                      ).map((b, i) => (
-                                                        <Badge
-                                                          key={i}
-                                                          color="yellow"
-                                                        >
-                                                          {b.bin ?? "?"} / Row{" "}
-                                                          {b.row ?? "?"} (x
-                                                          {b.quantity ?? "?"})
-                                                        </Badge>
-                                                      ))}
-                                                    </Group>
-                                                  </Box>
+    {it.condition && (
+      <Badge size="sm" variant="light" color="blue">
+        {it.condition}
+      </Badge>
+    )}
+  </Group>
+
+  <Text size="sm" mt={4}>
+    Qty: {it.quantity ?? "?"}
+  </Text>
+
+  {/* BIN LOCATIONS */}
+  <Group gap={6} mt={6}>
+    {(it.binLocations || []).map((b, i) => (
+      <Badge key={i} color="yellow">
+        {b.bin ?? "?"} / Row {b.row ?? "?"} (x{b.quantity ?? "?"})
+      </Badge>
+    ))}
+  </Group>
+</Box>
 
                                                   <Group
                                                     gap="xs"

@@ -55,6 +55,11 @@ type CatalogCard = {
   condition?: string;
   imageUrl?: string;
   market?: number | null;
+
+  // Yu-Gi-Oh / generic metadata
+  edition?: string | null;
+  finish?: string | null;
+  cardType?: string | null;
 };
 
 type StagedItem = {
@@ -302,24 +307,70 @@ try {
             ? c.marketPrice
             : null;
 
-        return {
-          id,
-          name: c.name ?? "Unknown Card",
-          setName: c.setName ?? c.expansion_name,
-          setCode: c.setCode ?? c.expansion_code,
-          rarity: c.rarity,
-          number: c.collectorNumber ?? c.number,
-          language: c.language,
-          condition: c.condition,
-          imageUrl:
-            c.image_url ||
-            c.imageUrl ||
-            c.image ||
-            (Array.isArray(c.images) ? c.images[0]?.url : undefined),
-          market: marketRaw,
-        };
-      });
+        const props = c.properties || {};
 
+return {
+  id,
+  name: c.name ?? "Unknown Card",
+  setName: c.setName ?? c.expansion_name ?? c.expansion,
+  setCode: c.setCode ?? c.expansion_code,
+
+  rarity:
+    c.rarity ||
+    props.yugioh_rarity ||
+    props.rarity ||
+    props.mtg_rarity ||
+    null,
+
+  number:
+    c.collectorNumber ||
+    c.number ||
+    props.collector_number ||
+    props.card_number ||
+    props.yugioh_card_number ||
+    null,
+
+  language:
+    c.language ||
+    props.yugioh_language ||
+    props.mtg_language ||
+    props.language ||
+    null,
+
+  condition:
+    c.condition ||
+    props.condition ||
+    null,
+
+  edition:
+    props.edition ||
+    props.yugioh_edition ||
+    props.printing ||
+    props.version ||
+    null,
+
+  finish:
+    props.finish ||
+    props.foiling ||
+    props.foil ||
+    props.yugioh_foil ||
+    null,
+
+  cardType:
+    props.card_type ||
+    props.yugioh_card_type ||
+    props.type ||
+    null,
+
+  imageUrl:
+    c.image_url ||
+    c.imageUrl ||
+    c.image ||
+    (Array.isArray(c.images) ? c.images[0]?.url : undefined),
+
+  market: marketRaw,
+};
+});
       const totalFromServer =
         typeof data.total === "number" ? data.total : items.length;
 
@@ -614,9 +665,9 @@ try {
           <Text fw={700}>Search results</Text>
           {total > 0 && (
             <Text size="xs" c="dimmed">
-              Showing {(page - 1) * PAGE_SIZE + 1}–
-              {Math.min(page * PAGE_SIZE, total)} of {total} results
-            </Text>
+  Showing {(page - 1) * PAGE_SIZE + 1}–
+  {Math.min(page * PAGE_SIZE, total)} of {total} results
+</Text>
           )}
         </Group>
 
@@ -985,10 +1036,22 @@ function StackResults({
                           : card.setName ?? "Unknown set"}
                       </Text>
                       <Text size="xs" c="dimmed">
-                        {card.rarity ? `${card.rarity} · ` : ""}
-                        {card.number ? `#${card.number} · ` : ""}
-                        {card.language || "EN"}
-                      </Text>
+  {[
+    card.rarity,
+    card.finish,
+    card.edition,
+    card.number ? `#${card.number}` : null,
+    card.language || "EN",
+  ]
+    .filter(Boolean)
+    .join(" · ")}
+</Text>
+
+{card.cardType && (
+  <Text size="xs" c="dimmed">
+    {card.cardType}
+  </Text>
+)}
                     </Box>
 
                     <Box ta="right">

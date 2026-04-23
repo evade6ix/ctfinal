@@ -248,18 +248,19 @@ const [loadingGames, setLoadingGames] = useState(false);
     const pageToUse = targetPage ?? page;
 
     setLoadingSearch(true);
-    setError(null);
-    setHasSearched(true);
+setError(null);
+setHasSearched(true);
 
-    const body = {
-  gameId,
-  setIds: selectedSetIds,
-  query: query.trim() || null,
-  page: pageToUse,
-  pageSize: PAGE_SIZE,
-};
+try {
+  const body = {
+    gameId,
+    setIds: selectedSetIds,
+    query: query.trim() || null,
+    page: pageToUse,
+    pageSize: PAGE_SIZE,
+  };
 
-      const res = await fetch("/api/catalog/search", {
+  const res = await fetch("/api/catalog/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

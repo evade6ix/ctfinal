@@ -50,6 +50,7 @@ type CatalogCard = {
   setName?: string;
   setCode?: string;
   rarity?: string;
+  version?: string | null;
   number?: string;
   language?: string;
   condition?: string;
@@ -317,11 +318,11 @@ return {
 
   rarity:
     c.rarity ||
+    c.version ||
     props.yugioh_rarity ||
     props.rarity ||
     props.mtg_rarity ||
     null,
-
   number:
     c.collectorNumber ||
     c.number ||

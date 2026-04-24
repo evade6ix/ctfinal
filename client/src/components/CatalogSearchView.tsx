@@ -1009,10 +1009,14 @@ function CatalogResultRow({
                   {card.name}
                 </Text>
                 <Text size="xs" c="dimmed">
-                  {card.setCode
-                    ? `${card.setCode} – ${card.setName ?? ""}`
-                    : card.setName ?? ""}
-                </Text>
+  {card.setCode
+    ? `${card.setCode} – ${card.setName ?? ""}`
+    : card.setName ?? ""}
+</Text>
+
+<Text size="xs" c="dimmed">
+  {card.rarity ? `Rarity: ${card.rarity}` : "Rarity: —"}
+</Text>
               </Box>
 
               <Badge size="sm" variant="light">

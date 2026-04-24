@@ -1038,14 +1038,14 @@ function StackResults({
                       </Text>
                       <Text size="xs" c="dimmed">
   {[
-    card.rarity,
-    card.finish,
-    card.edition,
-    card.number ? `#${card.number}` : null,
-    card.language || "EN",
-  ]
-    .filter(Boolean)
-    .join(" · ")}
+  card.rarity || card.version,
+  card.finish,
+  card.edition,
+  card.number ? `#${card.number}` : null,
+  card.language || "EN",
+]
+  .filter(Boolean)
+  .join(" · ")}
 </Text>
 
 {card.cardType && (

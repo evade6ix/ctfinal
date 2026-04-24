@@ -338,13 +338,14 @@ return {
   props.yugioh_rarity ||
   props.rarity ||
   props.mtg_rarity ||
-  ygoRarityFromNumber(
-    c.collectorNumber ||
-      c.number ||
-      props.collector_number ||
-      props.card_number ||
-      props.yugioh_card_number
-  ) ||
+  null,
+
+number:
+  c.collectorNumber ||
+  c.number ||
+  props.collector_number ||
+  props.card_number ||
+  props.yugioh_card_number ||
   null,
 
   language:
@@ -1054,7 +1055,10 @@ function StackResults({
                       </Text>
                       <Text size="xs" c="dimmed">
   {[
-  card.rarity || card.version || ygoRarityFromNumber(card.number),
+  ygoRarityFromNumber(card.rarity) ||
+    ygoRarityFromNumber(card.number) ||
+    card.rarity ||
+    card.version,
   card.finish,
   card.edition,
   card.number ? `#${card.number}` : null,

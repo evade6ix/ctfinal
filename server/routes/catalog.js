@@ -229,19 +229,32 @@ router.post("/search", async (req, res) => {
         (data || []).forEach((bp) => {
           const exp = expansionsById.get(bp.expansion_id);
           allBlueprints.push({
-            id: bp.id,
-            name: bp.name,
-            version: bp.version,
-            gameId: bp.game_id,
-            categoryId: bp.category_id,
-            expansionId: bp.expansion_id,
-            setCode: exp && exp.code,
-            setName: exp && exp.name,
-            scryfallId: bp.scryfall_id,
-            tcgPlayerId: bp.tcg_player_id,
-            cardMarketIds: bp.card_market_ids,
-            imageUrl: bp.image_url,
-          });
+  id: bp.id,
+  name: bp.name,
+  version: bp.version,
+
+  // YGO / generic blueprint metadata
+  rarity:
+    bp.fixed_properties?.yugioh_rarity ||
+    bp.fixed_properties?.rarity ||
+    bp.fixed_properties?.mtg_rarity ||
+    bp.version ||
+    null,
+
+  number:
+    bp.fixed_properties?.collector_number ||
+    null,
+
+  gameId: bp.game_id,
+  categoryId: bp.category_id,
+  expansionId: bp.expansion_id,
+  setCode: exp && exp.code,
+  setName: exp && exp.name,
+  scryfallId: bp.scryfall_id,
+  tcgPlayerId: bp.tcg_player_id,
+  cardMarketIds: bp.card_market_ids,
+  imageUrl: bp.image_url,
+});
         });
       } catch (err) {
         console.error(
@@ -275,9 +288,9 @@ router.post("/search", async (req, res) => {
   slice.map(async (bp) => {
     const market = await getMarketPriceForBlueprint(client, bp.id);
 
-    let rarity = null;
-    let edition = null;
-    let finish = null;
+    let rarity = bp.rarity || bp.version || null;
+let edition = null;
+let finish = null;
 
     try {
       const resp = await client.get("/marketplace/products", {
@@ -296,10 +309,12 @@ router.post("/search", async (req, res) => {
         const p = first?.properties || {};
 
         rarity =
-          p.yugioh_rarity ||
-          p.rarity ||
-          p.mtg_rarity ||
-          null;
+  p.yugioh_rarity ||
+  p.rarity ||
+  p.mtg_rarity ||
+  bp.rarity ||
+  bp.version ||
+  null;
 
         edition =
           p.edition ||
@@ -328,7 +343,9 @@ router.post("/search", async (req, res) => {
       finish,
     };
   })
-);res.json({
+);
+
+res.json({
       items,
       total,
       page,

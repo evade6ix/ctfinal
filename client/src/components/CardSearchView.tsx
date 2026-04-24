@@ -97,6 +97,8 @@ function clampSuggested(market: number) {
   return Math.max(0.01, Math.round(s * 100) / 100);
 }
 
+
+
 function ygoRarityFromNumber(num?: string | null) {
   const n = String(num || "").toLowerCase();
 
@@ -1052,7 +1054,7 @@ function StackResults({
                       </Text>
                       <Text size="xs" c="dimmed">
   {[
-  card.rarity || card.version,
+  card.rarity || card.version || ygoRarityFromNumber(card.number),
   card.finish,
   card.edition,
   card.number ? `#${card.number}` : null,

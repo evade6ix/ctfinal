@@ -97,6 +97,20 @@ function clampSuggested(market: number) {
   return Math.max(0.01, Math.round(s * 100) / 100);
 }
 
+function ygoRarityFromNumber(num?: string | null) {
+  const n = String(num || "").toLowerCase();
+
+  if (n.endsWith("psec")) return "Platinum Secret Rare";
+  if (n.endsWith("sec")) return "Secret Rare";
+  if (n.endsWith("sr")) return "Super Rare";
+  if (n.endsWith("ur")) return "Ultra Rare";
+  if (n.endsWith("ul")) return "Ultimate Rare";
+  if (n.endsWith("cr")) return "Collector's Rare";
+  if (n.endsWith("sl")) return "Starlight Rare";
+
+  return null;
+}
+
 export function CatalogSearchView() {
   // ---- GAME + SET SELECTION ----
   const [games, setGames] = useState<GameOption[]>([]);
@@ -317,19 +331,19 @@ return {
   setCode: c.setCode ?? c.expansion_code,
 
   rarity:
-    c.rarity ||
-    c.version ||
-    props.yugioh_rarity ||
-    props.rarity ||
-    props.mtg_rarity ||
-    null,
-  number:
+  c.rarity ||
+  c.version ||
+  props.yugioh_rarity ||
+  props.rarity ||
+  props.mtg_rarity ||
+  ygoRarityFromNumber(
     c.collectorNumber ||
-    c.number ||
-    props.collector_number ||
-    props.card_number ||
-    props.yugioh_card_number ||
-    null,
+      c.number ||
+      props.collector_number ||
+      props.card_number ||
+      props.yugioh_card_number
+  ) ||
+  null,
 
   language:
     c.language ||

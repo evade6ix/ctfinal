@@ -1053,19 +1053,9 @@ function StackResults({
                           ? `${card.setCode} – ${card.setName ?? ""}`
                           : card.setName ?? "Unknown set"}
                       </Text>
-                      <Text size="xs" c="dimmed">
-  {[
-  ygoRarityFromNumber(card.rarity) ||
-    ygoRarityFromNumber(card.number) ||
-    card.rarity ||
-    card.version,
-  card.finish,
-  card.edition,
-  card.number ? `#${card.number}` : null,
-  card.language || "EN",
-]
-  .filter(Boolean)
-  .join(" · ")}
+                      <Text size="xs" c="red" fw={900}>
+  TEST RARITY: {ygoRarityFromNumber(card.rarity) || "NO MATCH"} | RAW:{" "}
+  {card.rarity || "NO RARITY"} | NUM: {card.number || "NO NUMBER"}
 </Text>
 
 {card.cardType && (

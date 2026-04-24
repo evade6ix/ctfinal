@@ -309,11 +309,11 @@ let finish = null;
         const p = first?.properties || {};
 
         rarity =
+  bp.rarity ||
+  bp.version ||
   p.yugioh_rarity ||
   p.rarity ||
   p.mtg_rarity ||
-  bp.rarity ||
-  bp.version ||
   null;
 
         edition =

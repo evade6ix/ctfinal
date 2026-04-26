@@ -321,15 +321,19 @@ const hasUsableStock = (item) =>
 
 if (!hasUsableStock(invItem)) {
   const normalizedCondition = String(it.condition || "").replace(/^Near Mint$/i, "NM");
-  const escapedName = String(it.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const conditionOptions =
+  normalizedCondition.toLowerCase() === "nm"
+    ? ["NM", "Near Mint", "near mint", "nm"]
+    : [normalizedCondition];
 
-  const fallbackQuery = {
-    name: new RegExp(`^${escapedName}$`, "i"),
-    condition: new RegExp(`^${normalizedCondition}$`, "i"),
-    isFoil: it.isFoil === true,
-    locations: { $exists: true, $ne: [] },
-  };
+const escapedName = String(it.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const fallbackQuery = {
+  name: new RegExp(`^${escapedName}$`, "i"),
+  condition: { $in: conditionOptions },
+  isFoil: it.isFoil === true,
+  locations: { $exists: true, $ne: [] },
+};
   const fallbackItem = await InventoryItem.findOne(fallbackQuery)
     .populate("locations.bin", "name label rows description")
     .exec();

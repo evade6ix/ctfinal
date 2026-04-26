@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { ct } from "../ctClient.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 
+const ORDER_CODE = "2026042430thx2";
 const MAX_PAGES = 100;
 
 const OPEN_STATES = new Set([
@@ -77,12 +78,14 @@ for (let page = 1; page <= MAX_PAGES; page++) {
   if (!orders.length) break;
 
   for (const o of orders) {
-    const state = norm(o.state || o.status);
-    if (OPEN_STATES.has(state)) openOrders.push(o);
-  }
+  const orderCode = norm(o.code || o.order_code || o.reference);
+  if (orderCode === norm(ORDER_CODE)) openOrders.push(o);
 }
 
-console.log(`✅ Open orders found: ${openOrders.length}`);
+if (openOrders.length) break;
+}
+
+console.log(`Checking order ${ORDER_CODE}...`);
 
 let issueCount = 0;
 
@@ -112,10 +115,10 @@ for (const order of openOrders) {
     const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const candidates = await InventoryItem.find({
-      name: new RegExp(`^${escapedName}$`, "i"),
-      condition: new RegExp(`^${condition}$`, "i"),
-      isFoil,
-    }).lean();
+  name: new RegExp(`^${escapedName}$`, "i"),
+  condition: { $in: [condition, "NM", "Near Mint"] },
+  isFoil,
+}).lean();
 
     const stocked = [];
 
@@ -135,7 +138,8 @@ for (const order of openOrders) {
       });
     }
 
-    orderIssues.push({
+    if (stocked.length) {
+  orderIssues.push({
       soldCardTraderId: soldId,
       name,
       condition,

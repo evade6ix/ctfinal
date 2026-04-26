@@ -83,16 +83,17 @@ async function getScryfallImageLimited(cardName, ctx) {
   return url;
 }
 
-/**
- * Best-effort foil normalization from CardTrader line item shape
- */
-function extractIsFoil(item) {
+function extractIsFoil(a) {
   return (
-    item?.foil === true ||
-    item?.is_foil === true ||
-    item?.attributes?.foil === true ||
-    item?.properties?.foil === true ||
-    false
+    a?.isFoil === true ||
+    a?.is_foil === true ||
+    a?.foil === true ||
+    a?.properties?.mtg_foil === true ||
+    a?.properties?.foil === true ||
+    a?.properties_hash?.mtg_foil === true ||
+    String(a?.variant || "").toLowerCase().includes("foil") ||
+    String(a?.name || "").toLowerCase().includes("foil") ||
+    String(a?.description || "").toLowerCase().includes("foil")
   );
 }
 
@@ -290,60 +291,75 @@ router.get("/:id", async (req, res) => {
         }
 
         // Already allocated: return stored allocation snapshot
-        if (existingAlloc) {
-          const binLocations = (existingAlloc.pickedLocations || []).map(
-            (pl) => ({
-              bin:
-                (pl.bin && (pl.bin.label || pl.bin.name)) ||
-                (typeof pl.bin === "string"
-                  ? pl.bin
-                  : String(pl.bin || "?")),
-              row: pl.row,
-              quantity: pl.quantity,
-            })
-          );
+if (existingAlloc) {
+  const binLocations = (existingAlloc.pickedLocations || []).map((pl) => ({
+    bin:
+      (pl.bin && (pl.bin.label || pl.bin.name)) ||
+      (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?")),
+    row: pl.row,
+    quantity: pl.quantity,
+  }));
 
-          return {
-            ...it,
-            blueprintId: resolvedBlueprintId,
-            image_url,
-            binLocations,
-            name: existingAlloc.name || it.name,
-            condition: existingAlloc.condition ?? it.condition ?? null,
-            isFoil: existingAlloc.isFoil ?? it.isFoil ?? false,
-            picked: !!existingAlloc.picked,
-            pickedAt: existingAlloc.pickedAt || null,
-            pickedBy: existingAlloc.pickedBy || null,
-          };
-        }
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations,
+    name: existingAlloc.name || it.name,
+    condition: existingAlloc.condition ?? it.condition ?? null,
+    isFoil: it.isFoil === true ? true : existingAlloc.isFoil ?? false,
+    picked: !!existingAlloc.picked,
+    pickedAt: existingAlloc.pickedAt || null,
+    pickedBy: existingAlloc.pickedBy || null,
+  };
+}
 
-        // Need to allocate now
-        if (!invItem || !Array.isArray(invItem.locations)) {
-          return {
-            ...it,
-            blueprintId: resolvedBlueprintId,
-            image_url,
-            binLocations: [],
-            picked: false,
-            pickedAt: null,
-            pickedBy: null,
-          };
-        }
+// Need to allocate now
+if (!invItem || !Array.isArray(invItem.locations)) {
+  console.warn("⚠️ NO LOCAL INVENTORY MATCH", {
+    orderId: orderIdStr,
+    orderCode: order.code || null,
+    name: it.name,
+    cardTraderId: ctId,
+    requestedQty,
+    condition: it.condition,
+    isFoil: it.isFoil,
+  });
 
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations: [],
+    picked: false,
+    pickedAt: null,
+    pickedBy: null,
+  };
+}
         const { pickedLocations, remainingLocations, unfilled } =
           allocateFromBins(invItem.locations || [], requestedQty);
 
         if (!pickedLocations.length) {
-          return {
-            ...it,
-            blueprintId: resolvedBlueprintId,
-            image_url,
-            binLocations: [],
-            picked: false,
-            pickedAt: null,
-            pickedBy: null,
-          };
-        }
+  console.warn("⚠️ ALLOCATION FAILED", {
+    orderId: orderIdStr,
+    orderCode: order.code || null,
+    name: it.name,
+    cardTraderId: ctId,
+    requestedQty,
+    totalQuantity: invItem.totalQuantity,
+    locations: invItem.locations,
+  });
+
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations: [],
+    picked: false,
+    pickedAt: null,
+    pickedBy: null,
+  };
+}
 
         const fulfilledQty = pickedLocations.reduce(
           (sum, loc) => sum + (loc.quantity || 0),
@@ -373,7 +389,7 @@ router.get("/:id", async (req, res) => {
                 unfilled,
                 name: it.name,
                 condition: it.condition,
-                isFoil: it.isFoil,
+                isFoil: it.isFoil || invItem?.isFoil || false,
                 pickedLocations: pickedLocations.map((pl) => ({
                   bin: pl.bin?._id || pl.bin,
                   row: pl.row,

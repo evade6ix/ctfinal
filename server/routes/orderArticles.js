@@ -260,9 +260,9 @@ router.get("/:id", async (req, res) => {
         const ctId = Number(it.cardTraderId);
         const requestedQty = Number(it.quantity) || 0;
 
-        const invItem = Number.isFinite(ctId)
-          ? inventoryMap.get(ctId)
-          : null;
+        let invItem = Number.isFinite(ctId)
+  ? inventoryMap.get(ctId)
+  : null;
 
         const existingAlloc = Number.isFinite(ctId)
           ? allocationMap.get(ctId)
@@ -312,6 +312,47 @@ if (existingAlloc) {
     pickedAt: existingAlloc.pickedAt || null,
     pickedBy: existingAlloc.pickedBy || null,
   };
+}
+
+const hasUsableStock = (item) =>
+  item &&
+  Array.isArray(item.locations) &&
+  item.locations.reduce((sum, loc) => sum + Number(loc.quantity || 0), 0) > 0;
+
+if (!hasUsableStock(invItem)) {
+  const normalizedCondition = String(it.condition || "").replace(/^Near Mint$/i, "NM");
+  const escapedName = String(it.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const setCode = String(invItem?.setCode || it.setCode || it.set_name || "").toLowerCase();
+
+  const fallbackQuery = {
+    name: new RegExp(`^${escapedName}$`, "i"),
+    condition: new RegExp(`^${normalizedCondition}$`, "i"),
+    isFoil: it.isFoil === true,
+    locations: { $exists: true, $ne: [] },
+  };
+
+  if (setCode) {
+    fallbackQuery.setCode = new RegExp(`^${setCode}$`, "i");
+  }
+
+  const fallbackItem = await InventoryItem.findOne(fallbackQuery)
+    .populate("locations.bin", "name label rows description")
+    .exec();
+
+  if (hasUsableStock(fallbackItem)) {
+    console.warn("⚠️ USING FALLBACK INVENTORY MATCH", {
+      orderId: orderIdStr,
+      orderCode: order.code || null,
+      soldCardTraderId: ctId,
+      fallbackCardTraderId: fallbackItem.cardTraderId,
+      name: it.name,
+      condition: it.condition,
+      isFoil: it.isFoil,
+      setCode: fallbackItem.setCode,
+    });
+
+    invItem = fallbackItem;
+  }
 }
 
 // Need to allocate now

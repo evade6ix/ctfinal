@@ -320,10 +320,31 @@ const hasUsableStock = (item) =>
   item.locations.reduce((sum, loc) => sum + Number(loc.quantity || 0), 0) > 0;
 
 if (!hasUsableStock(invItem)) {
-  const normalizedCondition = String(it.condition || "").replace(/^Near Mint$/i, "NM");
+ const normalizeCondition = (condition = "") => {
+  const c = String(condition).trim().toLowerCase();
+
+  if (c === "near mint" || c === "nm") return "NM";
+  if (c === "lightly played" || c === "slightly played" || c === "lp" || c === "sp") return "LP";
+  if (c === "moderately played" || c === "mp") return "MP";
+  if (c === "heavily played" || c === "hp") return "HP";
+  if (c === "damaged" || c === "poor" || c === "dm" || c === "dmg") return "DMG";
+
+  return String(condition || "").trim();
+};
+
+const normalizedCondition = normalizeCondition(it.condition);
+
 const conditionOptions =
-  normalizedCondition.toLowerCase() === "nm"
+  normalizedCondition === "NM"
     ? ["NM", "Near Mint", "near mint", "nm"]
+    : normalizedCondition === "LP"
+    ? ["LP", "Lightly Played", "lightly played", "Slightly Played", "slightly played", "SP", "sp"]
+    : normalizedCondition === "MP"
+    ? ["MP", "Moderately Played", "moderately played"]
+    : normalizedCondition === "HP"
+    ? ["HP", "Heavily Played", "heavily played"]
+    : normalizedCondition === "DMG"
+    ? ["DMG", "Damaged", "damaged", "Poor", "poor"]
     : [normalizedCondition];
 
 const escapedName = String(it.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -334,6 +355,10 @@ const fallbackQuery = {
   isFoil: it.isFoil === true,
   locations: { $exists: true, $ne: [] },
 };
+
+if (String(it.set_name || "").toLowerCase() === "torment") {
+  fallbackQuery.setCode = "tor";
+}
   const fallbackItem = await InventoryItem.findOne(fallbackQuery)
     .populate("locations.bin", "name label rows description")
     .exec();

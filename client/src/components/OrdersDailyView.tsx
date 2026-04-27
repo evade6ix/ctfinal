@@ -13,6 +13,7 @@ import {
   Stack,
   Table,
   Text,
+  TextInput,
   Title,
 } from "@mantine/core";
 
@@ -154,7 +155,10 @@ export function OrdersDailyView() {
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   // which row is currently loading a Scryfall image
-  const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
+  // which row is currently loading a Scryfall image
+const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
+
+const [cardSearch, setCardSearch] = useState("");
 
   // 1) Fetch all orders from /api/orders (same as OrdersView)
   useEffect(() => {
@@ -524,6 +528,15 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
         </div>
       </Group>
 
+      <TextInput
+        mb="md"
+        placeholder="Search cards across all daily orders..."
+        value={cardSearch}
+        onChange={(event) => {
+          setCardSearch(event.currentTarget.value);
+          setPageByDate({});
+        }}
+      />
       {loading && (
         <Group justify="center" mt="lg">
           <Loader size="sm" />
@@ -562,7 +575,26 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
       {!loading &&
         !error &&
         dailySummaries.map((day) => {
-          const lines = dailyLinesByDate[day.date] || [];
+          const rawLines = dailyLinesByDate[day.date] || [];
+const searchTerm = cardSearch.trim().toLowerCase();
+
+const lines = searchTerm
+  ? rawLines.filter((line) => {
+      const haystack = [
+        line.name,
+        line.set_name,
+        line.setCode,
+        line.bin,
+        line.condition,
+        line.isFoil ? "foil" : "non-foil",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(searchTerm);
+    })
+  : rawLines;
 
           const totalPages = Math.max(
             1,
@@ -570,7 +602,7 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
           );
           const currentPage = pageByDate[day.date] || 1;
           const safePage =
-            currentPage > totalPages ? totalPages : currentPage;
+  currentPage > totalPages ? 1 : currentPage;
           const startIndex = (safePage - 1) * PER_PAGE;
           const pageLines = lines.slice(
             startIndex,

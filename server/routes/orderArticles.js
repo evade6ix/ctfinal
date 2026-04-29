@@ -290,9 +290,10 @@ router.get("/:id", async (req, res) => {
           };
         }
 
-        // Already allocated: return stored allocation snapshot
-if (existingAlloc) {
-  const binLocations = (existingAlloc.pickedLocations || []).map((pl) => ({
+// Already allocated: return stored allocation snapshot ONLY if it has bins.
+// If it exists but has empty pickedLocations, continue below and re-allocate.
+if (existingAlloc && Array.isArray(existingAlloc.pickedLocations) && existingAlloc.pickedLocations.length > 0) {
+  const binLocations = existingAlloc.pickedLocations.map((pl) => ({
     bin:
       (pl.bin && (pl.bin.label || pl.bin.name)) ||
       (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?")),
@@ -314,6 +315,14 @@ if (existingAlloc) {
   };
 }
 
+if (existingAlloc) {
+  console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS - REALLOCATING", {
+    orderId: orderIdStr,
+    orderCode: order.code || null,
+    cardTraderId: ctId,
+    name: it.name,
+  });
+}
 const hasUsableStock = (item) =>
   item &&
   Array.isArray(item.locations) &&

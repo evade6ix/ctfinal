@@ -13,7 +13,7 @@ import {
 } from "@mantine/core";
 
 type ApiOrder = {
-  id: number | string;
+  id: number;
   code?: string;
   state?: string | null;
   createdAt?: string | null;
@@ -238,14 +238,21 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     }
   };
 
-  const handleToggleOrder = (orderId: string | number) => {
-    const willExpand = expandedOrderId !== orderId;
-    setExpandedOrderId(willExpand ? orderId : null);
+  const handleToggleOrder = (order: ApiOrder) => {
+  const orderId = Number(order.id);
 
-    if (willExpand) {
-      loadItems(orderId);
-    }
-  };
+  if (!Number.isFinite(orderId)) {
+    console.error("Invalid numeric CardTrader order id:", order);
+    return;
+  }
+
+  const willExpand = expandedOrderId !== orderId;
+  setExpandedOrderId(willExpand ? orderId : null);
+
+  if (willExpand) {
+    loadItems(orderId);
+  }
+};
 
   // On-demand: fetch real image for a single card by name
   const handleShowImage = async (
@@ -533,7 +540,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                         {/* MAIN ORDER ROW */}
                         <Table.Tr
                           style={{ cursor: "pointer" }}
-                          onClick={() => handleToggleOrder(o.id)}
+                          onClick={() => handleToggleOrder(o)}
                         >
                           <Table.Td>{o.code}</Table.Td>
                           <Table.Td>
@@ -556,7 +563,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                               variant="light"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleToggleOrder(o.id);
+                                handleToggleOrder(o);
                               }}
                             >
                               {expandedOrderId === o.id

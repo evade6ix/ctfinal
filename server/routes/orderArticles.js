@@ -239,25 +239,31 @@ router.get("/:id", async (req, res) => {
       inventoryMap.set(Number(item.cardTraderId), item);
     }
 
-    // 6️⃣ Previous allocations for this order
-// Daily may have saved allocations under the CardTrader order code,
-// while Weekly now loads by numeric CardTrader order id.
+// 6️⃣ Previous allocations for this order
+// CardTrader Zero weekly shipments can have allocations saved under
+// different numeric order IDs, but they share the same orderCode.
 const orderCodeStr = order.code ? String(order.code) : null;
 
 const existingAllocations = await OrderAllocation.find({
-  orderId: orderCodeStr
-    ? { $in: [orderIdStr, orderCodeStr] }
-    : orderIdStr,
+  ...(orderCodeStr
+    ? { $or: [{ orderId: orderIdStr }, { orderCode: orderCodeStr }] }
+    : { orderId: orderIdStr }),
   cardTraderId: { $in: ctIds },
 })
   .populate("pickedLocations.bin", "name label rows description")
   .exec();
 
     const allocationMap = new Map();
-    for (const alloc of existingAllocations) {
-      allocationMap.set(Number(alloc.cardTraderId), alloc);
-    }
 
+for (const alloc of existingAllocations) {
+  const key = `${Number(alloc.cardTraderId)}_${String(alloc.name || "").trim().toLowerCase()}`;
+
+  if (!allocationMap.has(key)) {
+    allocationMap.set(key, []);
+  }
+
+  allocationMap.get(key).push(alloc);
+}
     const ctx = { lookups: 0 };
 
     // 7️⃣ Build final lines
@@ -270,9 +276,9 @@ const existingAllocations = await OrderAllocation.find({
   ? inventoryMap.get(ctId)
   : null;
 
-        const existingAlloc = Number.isFinite(ctId)
-          ? allocationMap.get(ctId)
-          : null;
+  const allocKey = `${ctId}_${String(it.name || "").trim().toLowerCase()}`;
+const allocList = allocationMap.get(allocKey) || [];
+const existingAlloc = allocList.length ? allocList.shift() : null;
 
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
@@ -406,6 +412,38 @@ if (String(it.set_name || "").toLowerCase() === "torment") {
   }
 }
 
+// If no saved allocation, show bins from inventory (READ ONLY).
+// This does NOT subtract inventory or create allocations.
+if (invItem && Array.isArray(invItem.locations)) {
+  const fallbackBins = invItem.locations.map((loc) => ({
+    bin:
+      (loc.bin && (loc.bin.label || loc.bin.name)) ||
+      (typeof loc.bin === "string" ? loc.bin : String(loc.bin || "?")),
+    row: loc.row,
+    quantity: loc.quantity,
+  }));
+
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations: fallbackBins,
+    picked: false,
+    pickedAt: null,
+    pickedBy: null,
+  };
+}
+
+return {
+  ...it,
+  blueprintId: resolvedBlueprintId,
+  image_url,
+  binLocations: [],
+  picked: false,
+  pickedAt: null,
+  pickedBy: null,
+};
+
 // Need to allocate now
 if (!invItem || !Array.isArray(invItem.locations)) {
   console.warn("⚠️ NO LOCAL INVENTORY MATCH", {
@@ -469,31 +507,33 @@ if (!invItem || !Array.isArray(invItem.locations)) {
         // Save allocation snapshot
         try {
           await OrderAllocation.updateOne(
-            {
-              orderId: orderIdStr,
-              cardTraderId: ctId,
-            },
-            {
-              $set: {
-                orderCode: order.code || null,
-                requestedQuantity: requestedQty,
-                fulfilledQuantity: fulfilledQty,
-                unfilled,
-                name: it.name,
-                condition: it.condition,
-                isFoil: it.isFoil || invItem?.isFoil || false,
-                pickedLocations: pickedLocations.map((pl) => ({
-                  bin: pl.bin?._id || pl.bin,
-                  row: pl.row,
-                  quantity: pl.quantity,
-                })),
-                picked: false,
-                pickedAt: null,
-                pickedBy: null,
-              },
-            },
-            { upsert: true }
-          );
+  {
+    orderId: orderIdStr,
+    orderItemId: it.id,
+  },
+  {
+    $set: {
+      orderItemId: it.id,
+      cardTraderId: ctId,
+      orderCode: order.code || null,
+      requestedQuantity: requestedQty,
+      fulfilledQuantity: fulfilledQty,
+      unfilled,
+      name: it.name,
+      condition: it.condition,
+      isFoil: it.isFoil || invItem?.isFoil || false,
+      pickedLocations: pickedLocations.map((pl) => ({
+        bin: pl.bin?._id || pl.bin,
+        row: pl.row,
+        quantity: pl.quantity,
+      })),
+      picked: false,
+      pickedAt: null,
+      pickedBy: null,
+    },
+  },
+  { upsert: true }
+);
         } catch (err) {
           console.error("❌ Failed to save allocation", {
             orderId: orderIdStr,
@@ -536,10 +576,12 @@ if (!invItem || !Array.isArray(invItem.locations)) {
     console.error("   ↳ Data:", data || err.message || err);
 
     return res.status(500).json({
-      error: "Failed to fetch order items",
-      status,
-      ctError: data || null,
-    });
+  error: "Failed to fetch order items",
+  status,
+  message: err?.message || String(err),
+  stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined,
+  ctError: data || null,
+});
   }
 });
 

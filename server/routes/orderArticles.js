@@ -240,12 +240,18 @@ router.get("/:id", async (req, res) => {
     }
 
     // 6️⃣ Previous allocations for this order
-    const existingAllocations = await OrderAllocation.find({
-      orderId: orderIdStr,
-      cardTraderId: { $in: ctIds },
-    })
-      .populate("pickedLocations.bin", "name label rows description")
-      .exec();
+// Daily may have saved allocations under the CardTrader order code,
+// while Weekly now loads by numeric CardTrader order id.
+const orderCodeStr = order.code ? String(order.code) : null;
+
+const existingAllocations = await OrderAllocation.find({
+  orderId: orderCodeStr
+    ? { $in: [orderIdStr, orderCodeStr] }
+    : orderIdStr,
+  cardTraderId: { $in: ctIds },
+})
+  .populate("pickedLocations.bin", "name label rows description")
+  .exec();
 
     const allocationMap = new Map();
     for (const alloc of existingAllocations) {
@@ -290,8 +296,7 @@ router.get("/:id", async (req, res) => {
           };
         }
 
-// Already allocated: return stored allocation snapshot ONLY if it has bins.
-// If it exists but has empty pickedLocations, continue below and re-allocate.
+// Already allocated: return stored allocation snapshot.
 if (existingAlloc && Array.isArray(existingAlloc.pickedLocations) && existingAlloc.pickedLocations.length > 0) {
   const binLocations = existingAlloc.pickedLocations.map((pl) => ({
     bin:
@@ -316,12 +321,25 @@ if (existingAlloc && Array.isArray(existingAlloc.pickedLocations) && existingAll
 }
 
 if (existingAlloc) {
-  console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS - REALLOCATING", {
+  console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS", {
     orderId: orderIdStr,
     orderCode: order.code || null,
     cardTraderId: ctId,
     name: it.name,
   });
+
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations: [],
+    name: existingAlloc.name || it.name,
+    condition: existingAlloc.condition ?? it.condition ?? null,
+    isFoil: it.isFoil === true ? true : existingAlloc.isFoil ?? false,
+    picked: !!existingAlloc.picked,
+    pickedAt: existingAlloc.pickedAt || null,
+    pickedBy: existingAlloc.pickedBy || null,
+  };
 }
 const hasUsableStock = (item) =>
   item &&

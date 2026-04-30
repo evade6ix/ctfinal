@@ -255,13 +255,59 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
         continue;
       }
 
-      const existing = await OrderAllocation.findOne({
-        orderId: orderIdStr,
-        orderItemId,
-      }).lean();
+            let allocationClaim = null;
 
-      if (existing) {
-        skippedExisting++;
+      try {
+        allocationClaim = await OrderAllocation.create({
+          orderId: orderIdStr,
+          orderCode: orderCodeStr,
+          orderItemId,
+          cardTraderId,
+          requestedQuantity: requestedQty,
+          fulfilledQuantity: 0,
+          unfilled: requestedQty,
+          name: it.name || "Unknown item",
+          condition:
+            it.condition ||
+            it.card_condition ||
+            it.attributes?.condition ||
+            it.properties?.condition ||
+            it.properties_hash?.condition ||
+            it.properties_hash?.card_condition ||
+            null,
+          isFoil:
+            it.isFoil === true ||
+            it.is_foil === true ||
+            it.foil === true ||
+            String(it.isFoil || "").toLowerCase() === "true" ||
+            String(it.is_foil || "").toLowerCase() === "true" ||
+            String(it.foil || "").toLowerCase() === "true" ||
+            it.properties?.mtg_foil === true ||
+            String(it.properties?.mtg_foil || "").toLowerCase() === "true" ||
+            it.properties_hash?.mtg_foil === true ||
+            String(it.properties_hash?.mtg_foil || "").toLowerCase() === "true" ||
+            String(it.variant || "").toLowerCase().includes("foil") ||
+            String(it.name || "").toLowerCase().includes("foil") ||
+            String(it.description || "").toLowerCase().includes("foil"),
+          pickedLocations: [],
+          picked: false,
+          pickedAt: null,
+          pickedBy: null,
+        });
+      } catch (err) {
+        if (err?.code === 11000) {
+          skippedExisting++;
+          continue;
+        }
+
+        failed++;
+        failures.push({
+          orderItemId,
+          cardTraderId,
+          name: it.name || "Unknown item",
+          reason: "failed_to_claim_order_line",
+          error: err?.message || String(err),
+        });
         continue;
       }
 
@@ -333,15 +379,17 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
       }
 
       if (!hasUsableStock(invItem)) {
-        failed++;
-        failures.push({
-          orderItemId,
-          cardTraderId,
-          name: it.name || "Unknown item",
-          reason: "no_usable_stock_exact_or_safe_fallback",
-        });
-        continue;
-      }
+  await OrderAllocation.deleteOne({ _id: allocationClaim._id });
+
+  failed++;
+  failures.push({
+    orderItemId,
+    cardTraderId,
+    name: it.name || "Unknown item",
+    reason: "no_usable_stock_exact_or_safe_fallback",
+  });
+  continue;
+}
 
       const { pickedLocations, remainingLocations, unfilled } = allocateFromBins(
         invItem.locations || [],
@@ -354,6 +402,7 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
 );
 
 if (totalPicked < requestedQty) {
+  await OrderAllocation.deleteOne({ _id: allocationClaim._id });
   failed++;
   failures.push({
     orderItemId,
@@ -367,6 +416,7 @@ if (totalPicked < requestedQty) {
 }
 
       if (!pickedLocations.length) {
+        await OrderAllocation.deleteOne({ _id: allocationClaim._id });
         failed++;
         failures.push({
           orderItemId,
@@ -383,7 +433,10 @@ if (totalPicked < requestedQty) {
       invItem.totalQuantity = Math.max(0, Number(invItem.totalQuantity || 0) - fulfilledQty);
       await invItem.save();
 
-      await OrderAllocation.create({
+            await OrderAllocation.updateOne(
+        { _id: allocationClaim._id },
+        {
+          $set: {
         orderId: orderIdStr,
         orderCode: orderCodeStr,
         orderItemId,
@@ -425,7 +478,9 @@ isFoil:
         picked: false,
         pickedAt: null,
         pickedBy: null,
-      });
+                },
+        }
+      );
 
       allocated++;
     }

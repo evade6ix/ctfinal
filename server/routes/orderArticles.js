@@ -4,8 +4,6 @@ import axios from "axios";
 import { ct } from "../ctClient.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { OrderAllocation } from "../models/OrderAllocation.js";
-import { allocateFromBins } from "../utils/allocateFromBins.js";
-
 const router = express.Router();
 
 /**
@@ -465,25 +463,15 @@ if (!existingAlloc) {
   };
 }
 
-const binLocations = [];
-          bin:
-            (pl.bin && (pl.bin.label || pl.bin.name)) ||
-            (typeof pl.bin === "string"
-              ? pl.bin
-              : String(pl.bin || "?")),
-          row: pl.row,
-          quantity: pl.quantity,
-        }));
-
-        return {
-          ...it,
-          blueprintId: resolvedBlueprintId,
-          image_url,
-          binLocations,
-          picked: false,
-          pickedAt: null,
-          pickedBy: null,
-        };
+return {
+  ...it,
+  blueprintId: resolvedBlueprintId,
+  image_url,
+  binLocations: [],
+  picked: false,
+  pickedAt: null,
+  pickedBy: null,
+};
       })
     );
 

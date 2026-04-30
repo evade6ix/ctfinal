@@ -235,11 +235,14 @@ let failed = 0;
 for (const o of eligible) {
   const orderIdStr = String(o.id);
 
-  const url = `http://localhost:${process.env.PORT || 3000}/api/order-articles/${o.id}`;
-  console.log(`🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`);
+const url = `http://localhost:${process.env.PORT || 3000}/api/order-allocations/reconcile-order/${o.id}`;
+console.log(`🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`);
 
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(url, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+});
     const raw = await resp.text().catch(() => "");
 
     if (!resp.ok) {

@@ -166,10 +166,10 @@ router.post("/bulk-assign", async (req, res) => {
     }
 
     const rowNum = Number(row);
-    if (!Number.isFinite(rowNum) || rowNum < 1 || rowNum > 5) {
+    if (!Number.isFinite(rowNum) || rowNum < 1 || rowNum > 100) {
       return res
         .status(400)
-        .json({ error: "row must be a number between 1 and 5" });
+        .json({ error: "row must be a number between 1 and 100" });
     }
 
     let updated = 0;
@@ -284,10 +284,10 @@ router.post("/assign-unassigned-set-to-bin", async (req, res) => {
     }
 
     const rowNum = Number(row);
-    if (!Number.isFinite(rowNum) || rowNum < 1 || rowNum > 5) {
+    if (!Number.isFinite(rowNum) || rowNum < 1 || rowNum > 100) {
       return res
         .status(400)
-        .json({ error: "row must be a number between 1 and 5" });
+        .json({ error: "row must be a number between 1 and 100" });
     }
 
     // Find all inventory items for that set
@@ -468,6 +468,13 @@ router.get("/:id", async (req, res) => {
 // ============================================================
 
 router.post("/allocate", async (req, res) => {
+  return res.status(410).json({
+    ok: false,
+    error: "manual_allocation_disabled",
+    message:
+      "Manual inventory allocation is disabled. Orders must allocate through /api/order-allocations/reconcile-order/:orderId so inventory deductions always create OrderAllocation records.",
+  });
+});
   try {
     const { cardTraderId, quantity } = req.body || {};
 

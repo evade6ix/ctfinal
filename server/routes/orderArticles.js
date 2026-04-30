@@ -438,40 +438,20 @@ if (!it.blueprintId) {
   }
 }
 
-// Need to allocate now
-if (!invItem || !Array.isArray(invItem.locations)) {
-  console.warn("⚠️ NO LOCAL INVENTORY MATCH", {
+
+// Display route only: do NOT allocate or deduct inventory here.
+// Allocation should be handled by the server sync/reconcile job only.
+if (!existingAlloc) {
+  console.warn("⚠️ NO SAVED ALLOCATION FOR ORDER LINE", {
     orderId: orderIdStr,
     orderCode: order.code || null,
+    orderItemId: it.id,
     name: it.name,
     cardTraderId: ctId,
     requestedQty,
     condition: it.condition,
     isFoil: it.isFoil,
-  });
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations: [],
-    picked: false,
-    pickedAt: null,
-    pickedBy: null,
-  };
-}
-        const { pickedLocations, remainingLocations, unfilled } =
-          allocateFromBins(invItem.locations || [], requestedQty);
-
-        if (!pickedLocations.length) {
-  console.warn("⚠️ ALLOCATION FAILED", {
-    orderId: orderIdStr,
-    orderCode: order.code || null,
-    name: it.name,
-    cardTraderId: ctId,
-    requestedQty,
-    totalQuantity: invItem.totalQuantity,
-    locations: invItem.locations,
+    blueprintId: it.blueprintId,
   });
 
   return {
@@ -485,58 +465,7 @@ if (!invItem || !Array.isArray(invItem.locations)) {
   };
 }
 
-        const fulfilledQty = pickedLocations.reduce(
-          (sum, loc) => sum + (loc.quantity || 0),
-          0
-        );
-
-        // Update inventory
-        invItem.locations = remainingLocations;
-        invItem.totalQuantity = Math.max(
-          0,
-          (invItem.totalQuantity || 0) - fulfilledQty
-        );
-        await invItem.save();
-
-        // Save allocation snapshot
-        try {
-          await OrderAllocation.updateOne(
-  {
-    orderId: orderIdStr,
-    orderItemId: it.id,
-  },
-  {
-    $set: {
-      orderItemId: it.id,
-      cardTraderId: ctId,
-      orderCode: order.code || null,
-      requestedQuantity: requestedQty,
-      fulfilledQuantity: fulfilledQty,
-      unfilled,
-      name: it.name,
-      condition: it.condition,
-      isFoil: it.isFoil || invItem?.isFoil || false,
-      pickedLocations: pickedLocations.map((pl) => ({
-        bin: pl.bin?._id || pl.bin,
-        row: pl.row,
-        quantity: pl.quantity,
-      })),
-      picked: false,
-      pickedAt: null,
-      pickedBy: null,
-    },
-  },
-  { upsert: true }
-);
-        } catch (err) {
-          console.error("❌ Failed to save allocation", {
-            orderId: orderIdStr,
-            cardTraderId: ctId,
-            err: err.message,
-          });
-        }
-
-        const binLocations = pickedLocations.map((pl) => ({
+const binLocations = [];
           bin:
             (pl.bin && (pl.bin.label || pl.bin.name)) ||
             (typeof pl.bin === "string"

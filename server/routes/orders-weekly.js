@@ -44,7 +44,7 @@ const eligibleOrders = orders.filter((o) => {
   // include BOTH:
   // - Zero orders (hub_pending)
   // - Regular paid orders
-  return state === "paid" || isZero;
+  return state === "hub_pending";
 });
     // helper → get week start (Monday) from createdAt
     const getWeekId = (createdAt) => {

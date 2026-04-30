@@ -294,6 +294,7 @@ console.log("CT /products response:", JSON.stringify(data, null, 2));
             // ✅ Reuse the SAME helper as /debug/apply so behavior matches
             const stagedForMongo = {
   cardTraderId,
+  blueprintId,
   name: it.name || "Unknown",
   setCode: it.setCode || null,
   game: it.gameId || it.game || null,

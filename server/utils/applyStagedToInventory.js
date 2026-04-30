@@ -30,29 +30,34 @@ if (!Number.isFinite(numericRow) || numericRow < 1) {
   // If none exists, create a brand-new document with one location
   if (!inv) {
     inv = await InventoryItem.create({
-      cardTraderId: staged.cardTraderId,
-      name: staged.name || "",
-      setCode: staged.setCode || "",
-      game: staged.game || "",
-      condition: staged.condition || "NM",
-      isFoil: !!staged.isFoil,
-      price:
-        staged.price != null && Number.isFinite(Number(staged.price))
-          ? Number(staged.price)
-          : 0,
-      totalQuantity: qty,
-      locations: [
-        {
-          bin: binObjectId,
-          row: numericRow,
-          quantity: qty,
-        },
-      ],
-    });
+  cardTraderId: staged.cardTraderId,
+  blueprintId: staged.blueprintId || null,
+  name: staged.name || "",
+  setCode: staged.setCode || "",
+  game: staged.game || "",
+  condition: staged.condition || "NM",
+  isFoil: !!staged.isFoil,
+  price:
+    staged.price != null && Number.isFinite(Number(staged.price))
+      ? Number(staged.price)
+      : 0,
+  totalQuantity: qty,
+  locations: [
+    {
+      bin: binObjectId,
+      row: numericRow,
+      quantity: qty,
+    },
+  ],
+});
 
     // done
     return;
   }
+
+  if (staged.blueprintId) {
+  inv.blueprintId = staged.blueprintId;
+}
 
   // We have an existing item → update its metadata & locations
   inv.name = staged.name || inv.name || "";

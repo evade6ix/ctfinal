@@ -37,7 +37,15 @@ const orderAllocationSchema = new mongoose.Schema(
       type: String,
     },
 
-    // Which listing this allocation is for
+        // Exact CardTrader order line id
+    // This makes allocations unique per card line, not just per card/listing.
+    orderItemId: {
+      type: Number,
+      required: true,
+      index: true,
+    },
+
+    // Which CardTrader product/listing this allocation is for
     cardTraderId: {
       type: Number,
       required: true,
@@ -98,8 +106,11 @@ const orderAllocationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One allocation per order + cardTraderId
-orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 }, { unique: true });
+// One allocation per exact CardTrader order line
+orderAllocationSchema.index({ orderId: 1, orderItemId: 1 }, { unique: true });
+
+// Helpful lookup for older UI/search flows
+orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 });
 
 export const OrderAllocation = mongoose.model(
   "OrderAllocation",

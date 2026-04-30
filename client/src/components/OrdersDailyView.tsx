@@ -60,6 +60,7 @@ type DailySummary = {
 
 type DailyAllocationRef = {
   orderId: string | number;
+  orderItemId?: number;
   cardTraderId?: number;
   picked?: boolean;
 };
@@ -358,11 +359,11 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
 
                 // track allocation references (per order line)
                 line.allocations.push({
-                  orderId: order.id,
-                  cardTraderId: it.cardTraderId,
-                  picked: !!it.picked,
-                });
-
+  orderId: order.id,
+  orderItemId: it.id,
+  cardTraderId: it.cardTraderId,
+  picked: !!it.picked,
+});
                 line.totalAllocations += 1;
                 if (it.picked) {
                   line.pickedAllocations += 1;
@@ -465,10 +466,11 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              orderId: alloc.orderId,
-              cardTraderId: alloc.cardTraderId,
-              pickedBy: allPicked ? undefined : "DailyView",
-            }),
+  orderId: alloc.orderId,
+  orderItemId: alloc.orderItemId,
+  cardTraderId: alloc.cardTraderId,
+  pickedBy: allPicked ? undefined : "DailyView",
+}),
           }).then(async (res) => {
             if (!res.ok) {
               const txt = await res.text().catch(() => "");

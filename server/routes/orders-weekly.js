@@ -36,12 +36,16 @@ router.get("/", async (req, res) => {
       return res.json([]);
     }
 
-    // ✅ Only keep PAID orders for weekly shipments
-    const paidOrders = orders.filter((o) => {
-      const state = String(o.state || "").toLowerCase();
-      return state === "paid";
-    });
+    // ✅ Match the SAME logic as /api/orders/sync
+const eligibleOrders = orders.filter((o) => {
+  const state = String(o.state || "").toLowerCase();
+  const isZero = state === "hub_pending";
 
+  // include BOTH:
+  // - Zero orders (hub_pending)
+  // - Regular paid orders
+  return state === "paid" || isZero;
+});
     // helper → get week start (Monday) from createdAt
     const getWeekId = (createdAt) => {
       if (!createdAt) return "unknown";
@@ -60,7 +64,7 @@ router.get("/", async (req, res) => {
 
     const weeks = {};
 
-    for (const o of paidOrders) {
+    for (const o of eligibleOrders) {
       // 🔑 Use the normalized createdAt field
       const weekId = getWeekId(o.createdAt);
 
@@ -89,8 +93,8 @@ router.get("/", async (req, res) => {
 
     console.log(
       `[/api/orders-weekly] computed ${output.length} weeks from ${
-        paidOrders.length
-      } PAID orders (raw orders: ${orders.length})`
+  eligibleOrders.length
+} eligible orders (raw orders: ${orders.length})`
     );
 
     res.json(output);

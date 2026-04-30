@@ -60,6 +60,7 @@ type OrderItem = {
 };
 type AllocationPickState = {
   orderId: string;
+  orderItemId?: number;
   cardTraderId: number;
   picked: boolean;
   pickedAt?: string | null;
@@ -135,16 +136,21 @@ export function OrdersView() {
 
       const data: AllocationPickState[] = await res.json();
 
-      const perCardTrader: Record<number, boolean> = {};
-      for (const alloc of data) {
-        if (typeof alloc.cardTraderId === "number") {
-          perCardTrader[alloc.cardTraderId] = !!alloc.picked;
-        }
-      }
+      const perLine: Record<number, boolean> = {};
+for (const alloc of data) {
+  const key =
+    typeof alloc.orderItemId === "number"
+      ? alloc.orderItemId
+      : alloc.cardTraderId;
+
+  if (typeof key === "number") {
+    perLine[key] = !!alloc.picked;
+  }
+}
 
       setPickedMap((prev) => ({
         ...prev,
-        [orderId]: perCardTrader,
+        [orderId]: perLine,
       }));
     } catch (err) {
       console.error("Error loading pick state for order", orderId, err);
@@ -317,10 +323,11 @@ export function OrdersView() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          orderId,
-          cardTraderId: ctId,
-          pickedBy: "manual", // you can wire your username later
-        }),
+  orderId,
+  orderItemId: item.id,
+  cardTraderId: ctId,
+  pickedBy: "manual", // you can wire your username later
+}),
       });
 
       if (!res.ok) {
@@ -521,9 +528,12 @@ export function OrdersView() {
                                         typeof it.cardTraderId === "number"
                                           ? it.cardTraderId
                                           : undefined;
-                                      const isPicked =
-                                        ctId !== undefined &&
-                                        !!pickedMap[o.id]?.[ctId];
+                                      const pickedKey =
+  typeof it.id === "number" ? it.id : ctId;
+
+const isPicked =
+  pickedKey !== undefined &&
+  !!pickedMap[o.id]?.[pickedKey];
 
                                       return (
                                         <Group

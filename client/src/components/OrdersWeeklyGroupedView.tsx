@@ -29,7 +29,7 @@ type WeeklySummary = {
 };
 
 type OrderItem = {
-  id?: number;
+  id?: number; // CardTrader order line id
   cardTraderId?: number;
   blueprintId?: number;
   name?: string;
@@ -327,10 +327,11 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId,
-            cardTraderId: item.cardTraderId,
-            pickedBy: "local", // later: use real username
-          }),
+  orderId,
+  orderItemId: item.id,
+  cardTraderId: item.cardTraderId,
+  pickedBy: "local", // later: use real username
+}),
         });
 
         if (!res.ok) {
@@ -375,9 +376,10 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId,
-            cardTraderId: item.cardTraderId,
-          }),
+  orderId,
+  orderItemId: item.id,
+  cardTraderId: item.cardTraderId,
+}),
         });
 
         if (!res.ok) {

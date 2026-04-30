@@ -256,13 +256,9 @@ const existingAllocations = await OrderAllocation.find({
     const allocationMap = new Map();
 
 for (const alloc of existingAllocations) {
-  const key = `${Number(alloc.cardTraderId)}_${String(alloc.name || "").trim().toLowerCase()}`;
-
-  if (!allocationMap.has(key)) {
-    allocationMap.set(key, []);
+  if (alloc.orderItemId != null) {
+    allocationMap.set(Number(alloc.orderItemId), alloc);
   }
-
-  allocationMap.get(key).push(alloc);
 }
     const ctx = { lookups: 0 };
 
@@ -276,9 +272,8 @@ for (const alloc of existingAllocations) {
   ? inventoryMap.get(ctId)
   : null;
 
-  const allocKey = `${ctId}_${String(it.name || "").trim().toLowerCase()}`;
-const allocList = allocationMap.get(allocKey) || [];
-const existingAlloc = allocList.length ? allocList.shift() : null;
+const existingAlloc =
+  it.id != null ? allocationMap.get(Number(it.id)) : null;
 
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
@@ -386,11 +381,28 @@ const fallbackQuery = {
   name: new RegExp(`^${escapedName}$`, "i"),
   condition: { $in: conditionOptions },
   isFoil: it.isFoil === true,
+  blueprintId: it.blueprintId,
   locations: { $exists: true, $ne: [] },
 };
 
-if (String(it.set_name || "").toLowerCase() === "torment") {
-  fallbackQuery.setCode = "tor";
+if (!it.blueprintId) {
+  console.warn("⚠️ SKIPPING FALLBACK MATCH WITHOUT BLUEPRINT ID", {
+    orderId: orderIdStr,
+    orderCode: order.code || null,
+    name: it.name,
+    cardTraderId: ctId,
+    setName: it.set_name,
+  });
+
+  return {
+    ...it,
+    blueprintId: resolvedBlueprintId,
+    image_url,
+    binLocations: [],
+    picked: false,
+    pickedAt: null,
+    pickedBy: null,
+  };
 }
   const fallbackItem = await InventoryItem.findOne(fallbackQuery)
     .populate("locations.bin", "name label rows description")
@@ -411,38 +423,6 @@ if (String(it.set_name || "").toLowerCase() === "torment") {
     invItem = fallbackItem;
   }
 }
-
-// If no saved allocation, show bins from inventory (READ ONLY).
-// This does NOT subtract inventory or create allocations.
-if (invItem && Array.isArray(invItem.locations)) {
-  const fallbackBins = invItem.locations.map((loc) => ({
-    bin:
-      (loc.bin && (loc.bin.label || loc.bin.name)) ||
-      (typeof loc.bin === "string" ? loc.bin : String(loc.bin || "?")),
-    row: loc.row,
-    quantity: loc.quantity,
-  }));
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations: fallbackBins,
-    picked: false,
-    pickedAt: null,
-    pickedBy: null,
-  };
-}
-
-return {
-  ...it,
-  blueprintId: resolvedBlueprintId,
-  image_url,
-  binLocations: [],
-  picked: false,
-  pickedAt: null,
-  pickedBy: null,
-};
 
 // Need to allocate now
 if (!invItem || !Array.isArray(invItem.locations)) {

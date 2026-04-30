@@ -1,8 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
 import { InventoryItem } from "../models/InventoryItem.js";
-import { allocateFromBins } from "../utils/allocateFromBins.js";
-
 
 const router = express.Router();
 
@@ -475,59 +473,3 @@ router.post("/allocate", async (req, res) => {
       "Manual inventory allocation is disabled. Orders must allocate through /api/order-allocations/reconcile-order/:orderId so inventory deductions always create OrderAllocation records.",
   });
 });
-  try {
-    const { cardTraderId, quantity } = req.body || {};
-
-    const requestedQty = Number(quantity);
-    if (!cardTraderId || !Number.isFinite(requestedQty) || requestedQty <= 0) {
-      return res.status(400).json({ error: "Invalid cardTraderId or quantity" });
-    }
-
-    // 1) Find inventory item with bins populated
-    const item = await InventoryItem.findOne({ cardTraderId })
-      .populate("locations.bin", "name label rows description")
-      .exec();
-
-    if (!item) {
-      return res.status(404).json({ error: "Inventory item not found" });
-    }
-
-    // 2) Allocate
-    const { pickedLocations, remainingLocations, unfilled } =
-      allocateFromBins(item.locations || [], requestedQty);
-
-    if (pickedLocations.length === 0) {
-      return res.status(400).json({ error: "Not enough stock in bins" });
-    }
-
-    // 3) Update DB – subtract from bins
-    const totalPicked = pickedLocations.reduce(
-      (sum, loc) => sum + (loc.quantity || 0),
-      0
-    );
-
-    item.locations = remainingLocations;
-    item.totalQuantity = Math.max(
-      0,
-      (item.totalQuantity || 0) - totalPicked
-    );
-
-    await item.save();
-
-    // 4) Return instructions to the UI
-    return res.json({
-      ok: true,
-      cardTraderId,
-      requestedQty,
-      fulfilledQty: totalPicked,
-      unfilled,
-      pickedLocations,
-    });
-  } catch (err) {
-    console.error("allocate error", err);
-    return res.status(500).json({ error: "allocate_failed" });
-  }
-});
-
-
-export default router;

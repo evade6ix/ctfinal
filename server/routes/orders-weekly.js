@@ -5,17 +5,19 @@ const router = express.Router();
 
 /**
  * GET /api/orders-weekly
- * Groups seller orders by week using the normalized createdAt field.
- * Relies on /api/orders returning { createdAt: ISO string }.
- * Only includes orders with state === "paid".
+ * Groups CardTrader Zero HUB_PENDING seller orders by completed week.
+ *
+ * Important:
+ * - Keeps the old grouped shipment style.
+ * - Hides the current active/open week.
+ * - Card/bin details still come from /api/order-articles/:id,
+ *   which reads OrderAllocation.pickedLocations.
  */
 router.get("/", async (req, res) => {
   try {
-    // Use the same port the app is actually listening on
     const port = process.env.PORT || 3000;
     const url = `http://127.0.0.1:${port}/api/orders`;
 
-    // Fetch from your normalized orders endpoint
     const r = await fetch(url);
 
     if (!r.ok) {
@@ -24,6 +26,7 @@ router.get("/", async (req, res) => {
         `❌ /api/orders-weekly: failed to fetch /api/orders (${r.status})`,
         txt.slice(0, 300)
       );
+
       return res
         .status(500)
         .json({ error: "Failed to fetch orders for weekly summary" });
@@ -36,37 +39,41 @@ router.get("/", async (req, res) => {
       return res.json([]);
     }
 
-    // ✅ Match the SAME logic as /api/orders/sync
-const eligibleOrders = orders.filter((o) => {
-  const state = String(o.state || "").toLowerCase();
-  const isZero = state === "hub_pending";
+    const eligibleOrders = orders.filter((o) => {
+      const state = String(o.state || "").toLowerCase();
+      return state === "hub_pending";
+    });
 
-  // include BOTH:
-  // - Zero orders (hub_pending)
-  // - Regular paid orders
-  return state === "hub_pending";
-});
-    // helper → get week start (Monday) from createdAt
+    // Monday-based week start, matching your current UI labels.
     const getWeekId = (createdAt) => {
       if (!createdAt) return "unknown";
 
       const d = new Date(createdAt);
       if (isNaN(d.getTime())) return "unknown";
 
-      // Convert to Monday-based week
       const day = d.getDay(); // Sun=0, Mon=1...
       const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+
       const monday = new Date(d);
       monday.setDate(diff);
+      monday.setHours(0, 0, 0, 0);
 
-      return monday.toISOString().substring(0, 10); // YYYY-MM-DD
+      return monday.toISOString().substring(0, 10);
     };
+
+    const currentWeekId = getWeekId(new Date().toISOString());
 
     const weeks = {};
 
     for (const o of eligibleOrders) {
-      // 🔑 Use the normalized createdAt field
       const weekId = getWeekId(o.createdAt);
+
+      // Hide the current active/open week.
+      // This prevents cards from the next still-building shipment
+      // from appearing in the weekly shipping group.
+      if (weekId === currentWeekId) {
+        continue;
+      }
 
       if (!weeks[weekId]) {
         weeks[weekId] = {
@@ -86,21 +93,19 @@ const eligibleOrders = orders.filter((o) => {
       (a, b) => new Date(b.weekStart) - new Date(a.weekStart)
     );
 
-    // Human-friendly total string
     output.forEach((w) => {
       w.totalValue = (w.totalValueCents / 100).toFixed(2);
     });
 
     console.log(
-      `[/api/orders-weekly] computed ${output.length} weeks from ${
-  eligibleOrders.length
-} eligible orders (raw orders: ${orders.length})`
+      `[/api/orders-weekly] computed ${output.length} completed weeks from ${eligibleOrders.length} eligible orders (raw orders: ${orders.length}, hidden current week: ${currentWeekId})`
     );
 
-    res.json(output);
+    return res.json(output);
   } catch (err) {
     console.error("❌ weekly error:", err);
-    res.status(500).json({
+
+    return res.status(500).json({
       error: "Failed to compute weekly shipments",
       details: err.message,
     });

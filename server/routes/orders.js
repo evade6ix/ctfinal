@@ -212,19 +212,34 @@ router.post("/sync", async (req, res) => {
       return TERMINAL_STATES.has(state);
     });
 
-    const terminalOrderIds = terminalOrders.map((o) => String(o.id));
+    const terminalOrderIds = terminalOrders
+  .map((o) => String(o.id))
+  .filter(Boolean);
 
-    let deletedAllocationsCount = 0;
-    if (terminalOrderIds.length) {
-      const deleteResult = await OrderAllocation.deleteMany({
-        orderId: { $in: terminalOrderIds },
-      });
+const terminalOrderCodes = terminalOrders
+  .map((o) => (o.code ? String(o.code) : null))
+  .filter(Boolean);
 
-      deletedAllocationsCount = deleteResult?.deletedCount || 0;
-      console.log(
-        `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrderIds.length} terminal orders`
-      );
-    }
+let deletedAllocationsCount = 0;
+
+if (terminalOrderIds.length || terminalOrderCodes.length) {
+  const deleteResult = await OrderAllocation.deleteMany({
+    $or: [
+      ...(terminalOrderIds.length
+        ? [{ orderId: { $in: terminalOrderIds } }]
+        : []),
+      ...(terminalOrderCodes.length
+        ? [{ orderCode: { $in: terminalOrderCodes } }]
+        : []),
+    ],
+  });
+
+  deletedAllocationsCount = deleteResult?.deletedCount || 0;
+
+  console.log(
+    `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrders.length} terminal orders`
+  );
+}
 
     // =====================================================
     // 3) Run allocations for ELIGIBLE orders (unchanged)

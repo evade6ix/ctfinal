@@ -473,3 +473,5 @@ router.post("/allocate", async (req, res) => {
       "Manual inventory allocation is disabled. Orders must allocate through /api/order-allocations/reconcile-order/:orderId so inventory deductions always create OrderAllocation records.",
   });
 });
+
+export default router;

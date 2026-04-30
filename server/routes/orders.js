@@ -6,10 +6,6 @@ import { InventoryItem } from "../models/InventoryItem.js";
 
 const router = express.Router();
 
-// =======================================================
-// GET /api/orders
-//  - Lists orders with allocated flag + ITEMS + imageUrl
-// =======================================================
 router.get("/", async (req, res) => {
   try {
     const client = ct();
@@ -38,12 +34,8 @@ router.get("/", async (req, res) => {
 
     console.log("Fetched", allOrders.length, "orders");
 
-    // 🔥 Build full orders INCLUDING ITEMS + imageUrl
     const mapped = await Promise.all(
       allOrders.map(async (o) => {
-        //
-        // ============ CREATED_AT LOGIC (unchanged) ============
-        //
         let rawCreated = null;
 
         if (Array.isArray(o.order_items) && o.order_items.length > 0) {
@@ -58,9 +50,6 @@ router.get("/", async (req, res) => {
           rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
         }
 
-        //
-        // ============ EXTRACT SIMPLE LINE ITEMS FROM CT ============
-        //
         let rawItems = [];
         if (Array.isArray(o.order_items)) rawItems = o.order_items;
         else if (Array.isArray(o.items)) rawItems = o.items;
@@ -74,9 +63,6 @@ router.get("/", async (req, res) => {
           quantity: it.quantity ?? 0,
         }));
 
-        //
-        // ============ LOOK UP IMAGEURL FROM MONGO ============
-        //
         const ctIds = baseItems
           .map((i) => Number(i.cardTraderId))
           .filter((x) => Number.isFinite(x));
@@ -106,9 +92,6 @@ router.get("/", async (req, res) => {
           };
         });
 
-        //
-        // RETURN ORDER WITH ITEMS + IMAGEURLs
-        //
         return {
           id: o.id,
           code: o.code,
@@ -120,15 +103,11 @@ router.get("/", async (req, res) => {
           sellerTotalCents: o.seller_total?.cents ?? null,
           sellerTotalCurrency: o.seller_total?.currency ?? null,
           formattedTotal: o.formatted_total ?? null,
-
-          items: finalItems, // 🔥 IMPORTANT: YOUR IMAGES LIVE HERE
+          items: finalItems,
         };
       })
     );
 
-    // ================================================================
-    // Attach allocation flags (unchanged)
-    // ================================================================
     const orderIdStrings = mapped.map((o) => String(o.id));
     const allocations = await OrderAllocation.find(
       { orderId: { $in: orderIdStrings } },
@@ -149,11 +128,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// =======================================================
-// POST /api/orders/sync
-//  - Allocates eligible orders
-//  - Cleans up allocations for finished orders
-// =======================================================
 router.post("/sync", async (req, res) => {
   try {
     const client = ct();
@@ -172,39 +146,34 @@ router.post("/sync", async (req, res) => {
 
       allOrders.push(...batch);
       if (batch.length < limit) break;
+
       page++;
     }
 
-    // Debug:
     const stateCounts = {};
     for (const o of allOrders) {
       const s = o.state ?? o.status ?? "UNKNOWN";
       stateCounts[s] = (stateCounts[s] || 0) + 1;
     }
+
     console.log("DEBUG /api/orders/sync states:", stateCounts);
     console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
 
-    // =====================================================
-    // 1) Determine which orders are ELIGIBLE for allocation
-    // =====================================================
     const eligible = allOrders.filter((o) => {
       const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
 
       if (isZero) return state === "hub_pending";
-      else return state === "paid";
+      return state === "paid";
     });
 
-    // =====================================================
-    // 2) CLEANUP: remove allocations for finished orders
-    // =====================================================
     const TERMINAL_STATES = new Set([
-      "sent",     // shipped
-      "arrived",  // arrived at buyer/hub
-      "done",     // review/timeout done
-      "canceled", // cancelled
-      "lost",     // lost
-      "closed",   // CT0 small orders closed after weekly merge
+      "sent",
+      "arrived",
+      "done",
+      "canceled",
+      "lost",
+      "closed",
     ]);
 
     const terminalOrders = allOrders.filter((o) => {
@@ -213,84 +182,104 @@ router.post("/sync", async (req, res) => {
     });
 
     const terminalOrderIds = terminalOrders
-  .map((o) => String(o.id))
-  .filter(Boolean);
+      .map((o) => String(o.id))
+      .filter(Boolean);
 
-const terminalOrderCodes = terminalOrders
-  .map((o) => (o.code ? String(o.code) : null))
-  .filter(Boolean);
+    const terminalOrderCodes = terminalOrders
+      .map((o) => (o.code ? String(o.code) : null))
+      .filter(Boolean);
 
-let deletedAllocationsCount = 0;
+    let deletedAllocationsCount = 0;
 
-if (terminalOrderIds.length || terminalOrderCodes.length) {
-  const deleteResult = await OrderAllocation.deleteMany({
-    $or: [
-      ...(terminalOrderIds.length
-        ? [{ orderId: { $in: terminalOrderIds } }]
-        : []),
-      ...(terminalOrderCodes.length
-        ? [{ orderCode: { $in: terminalOrderCodes } }]
-        : []),
-    ],
-  });
+    if (terminalOrderIds.length || terminalOrderCodes.length) {
+      const deleteResult = await OrderAllocation.deleteMany({
+        $or: [
+          ...(terminalOrderIds.length
+            ? [{ orderId: { $in: terminalOrderIds } }]
+            : []),
+          ...(terminalOrderCodes.length
+            ? [{ orderCode: { $in: terminalOrderCodes } }]
+            : []),
+        ],
+      });
 
-  deletedAllocationsCount = deleteResult?.deletedCount || 0;
+      deletedAllocationsCount = deleteResult?.deletedCount || 0;
 
-  console.log(
-    `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrders.length} terminal orders`
-  );
-}
-
-    // =====================================================
-    // 3) Run allocations for ELIGIBLE orders (unchanged)
-    // =====================================================
-    let triggered = 0;
-let failed = 0;
-
-for (const o of eligible) {
-  const orderIdStr = String(o.id);
-
-const url = `http://localhost:${process.env.PORT || 3000}/api/order-allocations/reconcile-order/${o.id}`;
-console.log(`🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`);
-
-  try {
-    const resp = await fetch(url, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-});
-    const raw = await resp.text().catch(() => "");
-
-    if (!resp.ok) {
-      console.error(
-        "❌ Failed to reconcile order via order-articles",
-        o.id,
-        resp.status,
-        raw.slice(0, 300)
+      console.log(
+        `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrders.length} terminal orders`
       );
-      failed++;
-      continue;
     }
 
-    triggered++;
-  } catch (err) {
-    console.error(
-      "❌ Error reconciling order via order-articles",
-      o.id,
-      err?.message || err
+    // Stale cleanup:
+    // Delete old allocations for orders CardTrader no longer returns,
+    // while keeping current active eligible orders safe.
+    const activeOrderIds = eligible.map((o) => String(o.id));
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+
+    const staleDeleteResult = await OrderAllocation.deleteMany({
+      orderId: { $nin: activeOrderIds },
+      createdAt: { $lt: tenDaysAgo },
+    });
+
+    const deletedStaleAllocationsCount = staleDeleteResult?.deletedCount || 0;
+
+    console.log(
+      `🧹 [ORDERS] Deleted ${deletedStaleAllocationsCount} stale allocations older than 10 days`
     );
-    failed++;
-  }
-}
+
+    let triggered = 0;
+    let failed = 0;
+
+    for (const o of eligible) {
+      const orderIdStr = String(o.id);
+      const url = `http://localhost:${
+        process.env.PORT || 3000
+      }/api/order-allocations/reconcile-order/${o.id}`;
+
+      console.log(
+        `🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`
+      );
+
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+
+        const raw = await resp.text().catch(() => "");
+
+        if (!resp.ok) {
+          console.error(
+            "❌ Failed to reconcile order via order-allocations",
+            o.id,
+            resp.status,
+            raw.slice(0, 300)
+          );
+          failed++;
+          continue;
+        }
+
+        triggered++;
+      } catch (err) {
+        console.error(
+          "❌ Error reconciling order via order-allocations",
+          o.id,
+          err?.message || err
+        );
+        failed++;
+      }
+    }
 
     const summary = {
-  ok: true,
-  fetchedOrders: allOrders.length,
-  eligibleOrders: eligible.length,
-  processedThisRun: triggered + failed,
-  reconciled: triggered,
-  failed,
-  deletedAllocationsCount,
-};
+      ok: true,
+      fetchedOrders: allOrders.length,
+      eligibleOrders: eligible.length,
+      processedThisRun: triggered + failed,
+      reconciled: triggered,
+      failed,
+      deletedAllocationsCount,
+      deletedStaleAllocationsCount,
+    };
 
     console.log("✅ [ORDERS] sync summary", summary);
     res.json(summary);

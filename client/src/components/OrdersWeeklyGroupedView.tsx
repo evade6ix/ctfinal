@@ -476,11 +476,12 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
       )}
 
       {!loading &&
-        data.map((week) => {
-          const label = formatWeekLabel(week.weekStart);
-          const paidOrders = (week.orders || []).filter(
-            (o) => String(o.state || "").toLowerCase() === "paid"
-          );
+  data.map((week) => {
+    const label = formatWeekLabel(week.weekStart);
+    const eligibleOrders = (week.orders || []).filter((o) => {
+      const state = String(o.state || "").toLowerCase();
+      return state === "paid" || state === "hub_pending";
+    });
 
           return (
             <Paper
@@ -512,7 +513,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
               </Group>
 
               {/* PAID ORDERS FOR THIS WEEK */}
-              {paidOrders.length > 0 ? (
+              {eligibleOrders.length > 0 ? (
                 <Table
                   withTableBorder
                   withColumnBorders
@@ -537,7 +538,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {paidOrders.map((o) => (
+                    {eligibleOrders.map((o) => (
                       <Fragment key={o.id}>
                         {/* MAIN ORDER ROW */}
                         <Table.Tr

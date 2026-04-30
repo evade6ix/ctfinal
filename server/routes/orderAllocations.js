@@ -168,15 +168,14 @@ router.post("/cleanup-stale", async (req, res) => {
 
     const paidIdArray = Array.from(paidOrderIds);
 
-    const deleteFilter =
-      paidIdArray.length > 0 ? { orderId: { $nin: paidIdArray } } : {};
-
-    const result = await OrderAllocation.deleteMany(deleteFilter);
-
     return res.json({
-      paidOrdersKept: paidIdArray.length,
-      deletedAllocations: result.deletedCount || 0,
-    });
+  ok: true,
+  disabled: true,
+  message:
+    "cleanup-stale is disabled because it can delete HUB_PENDING weekly allocations. Re-enable only after it supports paid + hub_pending + orderCode.",
+  paidOrdersSeen: paidIdArray.length,
+  deletedAllocations: 0,
+});
   } catch (err) {
     console.error("❌ Error in POST /api/order-allocations/cleanup-stale:", err);
     return res.status(500).json({

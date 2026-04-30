@@ -312,9 +312,11 @@ for (const alloc of data) {
       return;
     }
 
-    const currentForOrder = pickedMap[orderId] || {};
-    const currentlyPicked = !!currentForOrder[ctId];
-    const nextPicked = !currentlyPicked;
+    const pickedKey = typeof item.id === "number" ? item.id : ctId;
+
+const currentForOrder = pickedMap[orderId] || {};
+const currentlyPicked = !!currentForOrder[pickedKey];
+const nextPicked = !currentlyPicked;
 
     try {
       const endpoint = nextPicked ? "pick" : "unpick";
@@ -347,7 +349,7 @@ for (const alloc of data) {
           ...prev,
           [orderId]: {
             ...existing,
-            [ctId]: nextPicked,
+            [pickedKey]: nextPicked,
           },
         };
       });

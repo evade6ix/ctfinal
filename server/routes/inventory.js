@@ -6,6 +6,7 @@ import { allocateFromBins } from "../utils/allocateFromBins.js";
 
 const router = express.Router();
 
+
 router.get("/", async (req, res) => {
   try {
     const search = (req.query.search || "").trim();
@@ -345,6 +346,90 @@ router.post("/assign-unassigned-set-to-bin", async (req, res) => {
   } catch (err) {
     console.error("assign-unassigned-set-to-bin error", err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// GET /api/inventory/export.csv
+// Exports current inventory bin placements as CSV
+// ============================================================
+router.get("/export.csv", async (req, res) => {
+  try {
+    const items = await InventoryItem.find({})
+      .populate("locations.bin", "name label rows description")
+      .sort({ name: 1, setCode: 1 })
+      .lean();
+
+    const headers = [
+      "inventoryItemId",
+      "cardTraderId",
+      "blueprintId",
+      "game",
+      "setCode",
+      "name",
+      "condition",
+      "isFoil",
+      "price",
+      "totalQuantity",
+      "bin",
+      "row",
+      "locationQuantity",
+    ];
+
+    const escapeCsv = (value) => {
+      if (value === null || typeof value === "undefined") return "";
+      const str = String(value);
+      if (/[",\n\r]/.test(str)) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = [headers.join(",")];
+
+    for (const item of items) {
+      const locations = Array.isArray(item.locations) && item.locations.length
+        ? item.locations
+        : [{ bin: null, row: "", quantity: "" }];
+
+      for (const loc of locations) {
+        const binLabel =
+          (loc.bin && (loc.bin.label || loc.bin.name)) ||
+          (typeof loc.bin === "string" ? loc.bin : "");
+
+        rows.push(
+          [
+            item._id,
+            item.cardTraderId,
+            item.blueprintId,
+            item.game,
+            item.setCode,
+            item.name,
+            item.condition,
+            item.isFoil ? "TRUE" : "FALSE",
+            item.price,
+            item.totalQuantity,
+            binLabel,
+            loc.row,
+            loc.quantity,
+          ]
+            .map(escapeCsv)
+            .join(",")
+        );
+      }
+    }
+
+    const filename = `ctfinal-inventory-export-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    return res.send(rows.join("\n"));
+  } catch (err) {
+    console.error("❌ inventory export failed:", err);
+    return res.status(500).json({ error: "Failed to export inventory" });
   }
 });
 

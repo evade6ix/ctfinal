@@ -256,9 +256,19 @@ const existingAllocations = await OrderAllocation.find({
     const allocationMap = new Map();
 
 for (const alloc of existingAllocations) {
+  // New safe key: exact CardTrader order line
   if (alloc.orderItemId != null) {
-    allocationMap.set(Number(alloc.orderItemId), alloc);
+    allocationMap.set(`line:${Number(alloc.orderItemId)}`, alloc);
   }
+
+  // Legacy key: keeps old allocations working
+  const legacyKey = `${Number(alloc.cardTraderId)}_${String(
+    alloc.name || ""
+  )
+    .trim()
+    .toLowerCase()}`;
+
+  allocationMap.set(`legacy:${legacyKey}`, alloc);
 }
     const ctx = { lookups: 0 };
 
@@ -272,8 +282,12 @@ for (const alloc of existingAllocations) {
   ? inventoryMap.get(ctId)
   : null;
 
+const legacyKey = `${ctId}_${String(it.name || "").trim().toLowerCase()}`;
+
 const existingAlloc =
-  it.id != null ? allocationMap.get(Number(it.id)) : null;
+  (it.id != null ? allocationMap.get(`line:${Number(it.id)}`) : null) ||
+  allocationMap.get(`legacy:${legacyKey}`) ||
+  null;
 
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null

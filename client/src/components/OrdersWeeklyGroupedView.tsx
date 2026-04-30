@@ -478,10 +478,10 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
       {!loading &&
   data.map((week) => {
     const label = formatWeekLabel(week.weekStart);
-    const eligibleOrders = (week.orders || []).filter((o) => {
-      const state = String(o.state || "").toLowerCase();
-      return state === "paid" || state === "hub_pending";
-    });
+   const eligibleOrders = (week.orders || []).filter((o) => {
+  const state = String(o.state || "").toLowerCase();
+  return state === "hub_pending";
+});
 
           return (
             <Paper
@@ -830,7 +830,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                 </Table>
               ) : (
                 <Text size="sm" c="dimmed">
-                  No PAID orders in this week.
+                  No HUB_PENDING orders in this shipment.
                 </Text>
               )}
             </Paper>

@@ -100,8 +100,8 @@ async function start() {
       triggerSyncOrders();
 
       // Near real-time polling (safe due to OrderAllocation idempotency)
-      const ONE_MINUTE = 60 * 1000;
-      setInterval(triggerSyncOrders, ONE_MINUTE);
+     const FIVE_MINUTES = 5 * 60 * 1000;
+setInterval(triggerSyncOrders, FIVE_MINUTES);
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);

@@ -14,7 +14,8 @@ import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
-import orderAllocationsRouter from "./routes/orderAllocations.js";
+import orderAllocationsRouter from "./routes/orderAllocations.js"; // ✅
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -41,16 +42,42 @@ app.use("/api/orders-weekly", weeklyOrdersRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
 
 // ===================================================================
-// ORDER SYNC DISABLED ON STARTUP
+// AUTO-ALLOCATE / DEDUCT BINS FROM NEW ORDERS (CardTrader Zero)
+// Calls POST /api/orders/sync which triggers the same allocation logic
+// your UI uses (order-articles), but automatically.
 // ===================================================================
-// Do NOT auto-run /api/orders/sync on server start.
-// Do NOT poll CardTrader orders automatically.
-// This prevents old open CardTrader orders from being allocated against
-// newly rebuilt Mongo inventory after a wipe/reset.
-//
-// To sync orders manually later, run:
-// POST http://localhost:3000/api/orders/sync
-// ===================================================================
+
+async function triggerSyncOrders() {
+  try {
+    console.log("🔁 [ORDERS] Running POST /api/orders/sync ...");
+
+    const res = await fetch(`http://localhost:${PORT}/api/orders/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const raw = await res.text();
+    let data = null;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      // not JSON, ignore
+    }
+
+    if (!res.ok) {
+      console.error("❌ [ORDERS] sync failed", {
+        status: res.status,
+        raw,
+      });
+      return;
+    }
+
+    console.log("✅ [ORDERS] sync complete", data || raw);
+  } catch (err) {
+    console.error("❌ [ORDERS] sync error:", err?.message || err);
+  }
+}
 
 // ===================================================================
 // DATABASE + SERVER STARTUP
@@ -68,7 +95,13 @@ async function start() {
 
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
-      console.log("⚠️ Order auto-sync is DISABLED. No allocations will run on startup.");
+
+      // Run once on startup
+      triggerSyncOrders();
+
+      // Near real-time polling (safe due to OrderAllocation idempotency)
+     const FIVE_MINUTES = 5 * 60 * 1000;
+setInterval(triggerSyncOrders, FIVE_MINUTES);
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);

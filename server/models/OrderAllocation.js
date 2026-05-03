@@ -25,80 +25,93 @@ const pickedLocationSchema = new mongoose.Schema(
 
 const orderAllocationSchema = new mongoose.Schema(
   {
-    // CardTrader order id (numeric) – we store as string to be safe
     orderId: {
       type: String,
       required: true,
       index: true,
     },
 
-    // Optional: CT order code like "20260123XXXX"
     orderCode: {
       type: String,
+      index: true,
     },
 
-        // Exact CardTrader order line id
-    // This makes allocations unique per card line, not just per card/listing.
     orderItemId: {
       type: Number,
       required: true,
       index: true,
     },
 
-    // Which CardTrader product/listing this allocation is for
+    // Sold CardTrader listing/product ID from the order line
     cardTraderId: {
       type: Number,
       required: true,
       index: true,
     },
 
-    // ✅ NEW: snapshot data from the CT order line
     name: {
       type: String,
     },
+
     condition: {
       type: String,
     },
+
     isFoil: {
       type: Boolean,
       default: false,
     },
 
-    // How many the order line requested in total
     requestedQuantity: {
       type: Number,
       required: true,
       min: 1,
     },
 
-    // How many we actually fulfilled from bins
     fulfilledQuantity: {
       type: Number,
       required: true,
       min: 0,
+      default: 0,
     },
 
-    // If > 0, we didn’t have enough stock in bins
     unfilled: {
       type: Number,
       default: 0,
     },
 
-    // Exactly which bins/rows we pulled from
     pickedLocations: {
       type: [pickedLocationSchema],
       default: [],
     },
 
-    // 🔽🔽 NEW: UI “picked” toggle for that line 🔽🔽
+    // allocated = inventory was deducted
+    // manual_review = exact CardTrader ID missing / not enough stock, no deduction
+    // restored = inventory was restored later
+    // cancelled = order/allocation cancelled without active deduction
+    // shipped = kept for history after shipment
+    status: {
+      type: String,
+      enum: ["allocated", "manual_review", "restored", "cancelled", "shipped"],
+      default: "allocated",
+      index: true,
+    },
+
+    failureReason: {
+      type: String,
+      default: null,
+    },
+
     picked: {
       type: Boolean,
       default: false,
       index: true,
     },
+
     pickedAt: {
       type: Date,
     },
+
     pickedBy: {
       type: String,
     },
@@ -106,7 +119,7 @@ const orderAllocationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One allocation per exact CardTrader order line
+// One allocation/review record per exact CardTrader order line
 orderAllocationSchema.index({ orderId: 1, orderItemId: 1 }, { unique: true });
 
 // Helpful lookup for older UI/search flows

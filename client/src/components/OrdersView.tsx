@@ -274,32 +274,39 @@ for (const alloc of data) {
   };
 
   const handleSyncOrders = async () => {
-    try {
-      setSyncing(true);
-      setSyncMessage(null);
-      setSyncError(null);
+  const confirmed = window.confirm(
+    "This will run the safe order sync. It can still deduct inventory for NEW exact CardTrader ID matches. Make sure ORDER_SYNC_CUTOFF is set in server/.env before continuing. Continue?"
+  );
 
-      const res = await fetch("/api/orders/sync", { method: "POST" });
+  if (!confirmed) return;
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to sync orders");
-      }
+  try {
+    setSyncing(true);
+    setSyncMessage(null);
+    setSyncError(null);
 
-      const data = await res.json();
-      setSyncMessage(
-        data.message ??
-          `Sync complete. Updated ${data.updatedLines ?? 0} order lines.`
-      );
+    const res = await fetch("/api/orders/sync", { method: "POST" });
 
-      fetchOrders();
-    } catch (err: any) {
-      console.error("Sync failed:", err);
-      setSyncError(err.message || "Failed to sync orders");
-    } finally {
-      setSyncing(false);
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to sync orders");
     }
-  };
+
+    setSyncMessage(
+      `Safe sync complete. Eligible: ${data.eligibleOrders ?? 0}, reconciled: ${
+        data.reconciled ?? 0
+      }, failed: ${data.failed ?? 0}. Cutoff: ${data.cutoff ?? "none"}`
+    );
+
+    fetchOrders();
+  } catch (err: any) {
+    console.error("Sync failed:", err);
+    setSyncError(err.message || "Failed to sync orders");
+  } finally {
+    setSyncing(false);
+  }
+};
 
   // ✅ Toggle picked state for ONE card line
   const handleTogglePicked = async (
@@ -387,16 +394,15 @@ const nextPicked = !currentlyPicked;
           </Button>
 
           <Button
-            leftSection={<IconArrowsDownUp size={16} />}
-            onClick={handleSyncOrders}
-            loading={syncing}
-            variant="filled"
-            color="yellow"
-          >
-            Sync allocated orders
-          </Button>
-        </Group>
-      </Group>
+            <Button
+  leftSection={<IconArrowsDownUp size={16} />}
+  onClick={handleSyncOrders}
+  loading={syncing}
+  variant="filled"
+  color="red"
+>
+  Run Safe Sync
+</Button>
 
       {error && (
         <Paper p="sm" withBorder>

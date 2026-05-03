@@ -6,55 +6,70 @@ import { InventoryItem } from "../models/InventoryItem.js";
 
 const router = express.Router();
 
+function getOrderCreatedAt(o) {
+  let rawCreated = null;
+
+  if (Array.isArray(o.order_items) && o.order_items.length > 0) {
+    rawCreated = o.order_items[0].created_at || null;
+  }
+
+  if (!rawCreated && o.code && o.code.length >= 8) {
+    const d = o.code.substring(0, 8);
+    const year = d.substring(0, 4);
+    const month = d.substring(4, 6);
+    const day = d.substring(6, 8);
+    rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
+  }
+
+  return rawCreated;
+}
+
+function getRawItems(o) {
+  if (Array.isArray(o.order_items)) return o.order_items;
+  if (Array.isArray(o.items)) return o.items;
+  if (o.order_items?.data) return o.order_items.data;
+  if (o.items?.data) return o.items.data;
+  return [];
+}
+
+async function fetchAllSellerOrders() {
+  const client = ct();
+  let page = 1;
+  const limit = 50;
+  const allOrders = [];
+
+  while (true) {
+    const r = await client.get("/orders", {
+      params: {
+        order_as: "seller",
+        sort: "date.desc",
+        page,
+        limit,
+      },
+    });
+
+    const batch = Array.isArray(r.data) ? r.data : [];
+    if (!batch.length) break;
+
+    allOrders.push(...batch);
+    if (batch.length < limit) break;
+
+    page++;
+  }
+
+  return allOrders;
+}
+
 router.get("/", async (req, res) => {
   try {
-    const client = ct();
-    let page = 1;
-    const limit = 50;
-    const allOrders = [];
-
-    while (true) {
-      const r = await client.get("/orders", {
-        params: {
-          order_as: "seller",
-          sort: "date.desc",
-          page,
-          limit,
-        },
-      });
-
-      const batch = Array.isArray(r.data) ? r.data : [];
-      if (!batch.length) break;
-
-      allOrders.push(...batch);
-      if (batch.length < limit) break;
-
-      page++;
-    }
+    const allOrders = await fetchAllSellerOrders();
 
     console.log("Fetched", allOrders.length, "orders");
 
     const mapped = await Promise.all(
       allOrders.map(async (o) => {
-        let rawCreated = null;
-
-        if (Array.isArray(o.order_items) && o.order_items.length > 0) {
-          rawCreated = o.order_items[0].created_at || null;
-        }
-
-        if (!rawCreated && o.code && o.code.length >= 8) {
-          const d = o.code.substring(0, 8);
-          const year = d.substring(0, 4);
-          const month = d.substring(4, 6);
-          const day = d.substring(6, 8);
-          rawCreated = `${year}-${month}-${day}T00:00:00.000Z`;
-        }
-
-        let rawItems = [];
-        if (Array.isArray(o.order_items)) rawItems = o.order_items;
-        else if (Array.isArray(o.items)) rawItems = o.items;
-        else if (o.order_items?.data) rawItems = o.order_items.data;
-        else if (o.items?.data) rawItems = o.items.data;
+        const rawCreated = getOrderCreatedAt(o);
+        const rawItems = getRawItems(o);
 
         const baseItems = rawItems.map((it) => ({
           id: it.id,
@@ -103,6 +118,7 @@ router.get("/", async (req, res) => {
           sellerTotalCents: o.seller_total?.cents ?? null,
           sellerTotalCurrency: o.seller_total?.currency ?? null,
           formattedTotal: o.formatted_total ?? null,
+          viaCardTraderZero: !!o.via_cardtrader_zero,
           items: finalItems,
         };
       })
@@ -111,44 +127,49 @@ router.get("/", async (req, res) => {
     const orderIdStrings = mapped.map((o) => String(o.id));
     const allocations = await OrderAllocation.find(
       { orderId: { $in: orderIdStrings } },
-      "orderId"
+      "orderId status"
     ).lean();
 
-    const allocatedSet = new Set(allocations.map((a) => a.orderId));
+    const allocatedSet = new Set(
+      allocations
+        .filter((a) => a.status === "allocated")
+        .map((a) => a.orderId)
+    );
 
-    const mappedWithFlag = mapped.map((o) => ({
+    const manualReviewSet = new Set(
+      allocations
+        .filter((a) => a.status === "manual_review")
+        .map((a) => a.orderId)
+    );
+
+    const mappedWithFlags = mapped.map((o) => ({
       ...o,
       allocated: allocatedSet.has(String(o.id)),
+      manualReview: manualReviewSet.has(String(o.id)),
     }));
 
-    res.json(mappedWithFlag);
+    res.json(mappedWithFlags);
   } catch (err) {
     console.error("❌ Error fetching orders:", err?.response?.data || err);
     res.status(500).json({ error: "Failed to fetch orders" });
   }
 });
 
+/**
+ * POST /api/orders/sync
+ *
+ * SAFE RULES:
+ * - No allocation deletion here.
+ * - No stale cleanup here.
+ * - Only reconciles eligible active orders.
+ * - Optional cutoff prevents old orders from touching rebuilt inventory.
+ *
+ * Set in .env after a wipe/reset:
+ * ORDER_SYNC_CUTOFF=2026-05-02T00:00:00.000Z
+ */
 router.post("/sync", async (req, res) => {
   try {
-    const client = ct();
-
-    let page = 1;
-    const limit = 50;
-    const allOrders = [];
-
-    while (true) {
-      const r = await client.get("/orders", {
-        params: { order_as: "seller", sort: "date.desc", page, limit },
-      });
-
-      const batch = Array.isArray(r.data) ? r.data : [];
-      if (!batch.length) break;
-
-      allOrders.push(...batch);
-      if (batch.length < limit) break;
-
-      page++;
-    }
+    const allOrders = await fetchAllSellerOrders();
 
     const stateCounts = {};
     for (const o of allOrders) {
@@ -157,78 +178,52 @@ router.post("/sync", async (req, res) => {
     }
 
     console.log("DEBUG /api/orders/sync states:", stateCounts);
-    console.log("DEBUG /api/orders/sync sample order:", allOrders[0]);
+
+    // Auto-cutoff: ONLY process orders created TODAY (Toronto time)
+const now = new Date();
+
+const cutoff = new Date(
+  new Date().toLocaleString("en-CA", {
+    timeZone: "America/Toronto",
+  })
+);
+
+cutoff.setHours(0, 0, 0, 0);
+
+    if (cutoff && Number.isNaN(cutoff.getTime())) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid ORDER_SYNC_CUTOFF env value",
+        value: process.env.ORDER_SYNC_CUTOFF,
+      });
+    }
 
     const eligible = allOrders.filter((o) => {
       const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
 
-      if (isZero) return state === "hub_pending";
-      return state === "paid";
+      if (isZero && state !== "hub_pending") return false;
+      if (!isZero && state !== "paid") return false;
+
+      if (cutoff) {
+        const rawCreated = getOrderCreatedAt(o);
+        const createdAt = rawCreated ? new Date(rawCreated) : null;
+
+        if (!createdAt || Number.isNaN(createdAt.getTime())) {
+          return false;
+        }
+
+        if (createdAt < cutoff) {
+          return false;
+        }
+      }
+
+      return true;
     });
 
-    const TERMINAL_STATES = new Set([
-      "sent",
-      "arrived",
-      "done",
-      "canceled",
-      "lost",
-      "closed",
-    ]);
-
-    const terminalOrders = allOrders.filter((o) => {
-      const state = String(o.state || o.status || "").toLowerCase();
-      return TERMINAL_STATES.has(state);
-    });
-
-    const terminalOrderIds = terminalOrders
-      .map((o) => String(o.id))
-      .filter(Boolean);
-
-    const terminalOrderCodes = terminalOrders
-      .map((o) => (o.code ? String(o.code) : null))
-      .filter(Boolean);
-
-    let deletedAllocationsCount = 0;
-
-    if (terminalOrderIds.length || terminalOrderCodes.length) {
-      const deleteResult = await OrderAllocation.deleteMany({
-        $or: [
-          ...(terminalOrderIds.length
-            ? [{ orderId: { $in: terminalOrderIds } }]
-            : []),
-          ...(terminalOrderCodes.length
-            ? [{ orderCode: { $in: terminalOrderCodes } }]
-            : []),
-        ],
-      });
-
-      deletedAllocationsCount = deleteResult?.deletedCount || 0;
-
-      console.log(
-        `🧹 [ORDERS] Deleted ${deletedAllocationsCount} allocations for ${terminalOrders.length} terminal orders`
-      );
-    }
-
-    // Stale cleanup:
-    // Delete old allocations for orders CardTrader no longer returns,
-    // while keeping current active eligible orders safe.
-    const activeOrderIds = eligible.map((o) => String(o.id));
-    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
-
-    const staleDeleteResult = await OrderAllocation.deleteMany({
-      orderId: { $nin: activeOrderIds },
-      createdAt: { $lt: tenDaysAgo },
-    });
-
-    const deletedStaleAllocationsCount = staleDeleteResult?.deletedCount || 0;
-
-    console.log(
-      `🧹 [ORDERS] Deleted ${deletedStaleAllocationsCount} stale allocations older than 10 days`
-    );
-
-    let triggered = 0;
+    let reconciled = 0;
     let failed = 0;
+    const results = [];
 
     for (const o of eligible) {
       const orderIdStr = String(o.id);
@@ -237,7 +232,7 @@ router.post("/sync", async (req, res) => {
       }/api/order-allocations/reconcile-order/${o.id}`;
 
       console.log(
-        `🔁 [ORDERS] Reconciling allocations for order ${orderIdStr} via ${url}`
+        `🔁 [ORDERS] Reconciling safe allocations for order ${orderIdStr} via ${url}`
       );
 
       try {
@@ -247,26 +242,38 @@ router.post("/sync", async (req, res) => {
         });
 
         const raw = await resp.text().catch(() => "");
+        let parsed = null;
+
+        try {
+          parsed = raw ? JSON.parse(raw) : null;
+        } catch {
+          parsed = null;
+        }
 
         if (!resp.ok) {
-          console.error(
-            "❌ Failed to reconcile order via order-allocations",
-            o.id,
-            resp.status,
-            raw.slice(0, 300)
-          );
           failed++;
+          results.push({
+            orderId: orderIdStr,
+            ok: false,
+            status: resp.status,
+            details: raw.slice(0, 300),
+          });
           continue;
         }
 
-        triggered++;
+        reconciled++;
+        results.push({
+          orderId: orderIdStr,
+          ok: true,
+          result: parsed,
+        });
       } catch (err) {
-        console.error(
-          "❌ Error reconciling order via order-allocations",
-          o.id,
-          err?.message || err
-        );
         failed++;
+        results.push({
+          orderId: orderIdStr,
+          ok: false,
+          error: err?.message || String(err),
+        });
       }
     }
 
@@ -274,14 +281,15 @@ router.post("/sync", async (req, res) => {
       ok: true,
       fetchedOrders: allOrders.length,
       eligibleOrders: eligible.length,
-      processedThisRun: triggered + failed,
-      reconciled: triggered,
+      reconciled,
       failed,
-      deletedAllocationsCount,
-      deletedStaleAllocationsCount,
+      cutoff: cutoff ? cutoff.toISOString() : null,
+      deletedAllocationsCount: 0,
+      deletedStaleAllocationsCount: 0,
+      results,
     };
 
-    console.log("✅ [ORDERS] sync summary", summary);
+    console.log("✅ [ORDERS] safe sync summary", summary);
     res.json(summary);
   } catch (err) {
     console.error("❌ /api/orders/sync failed:", err?.response?.data || err);

@@ -365,7 +365,7 @@ const nextPicked = !currentlyPicked;
     }
   };
 
-  return (
+    return (
     <Stack gap="md">
       <Group justify="space-between">
         <div>
@@ -377,7 +377,6 @@ const nextPicked = !currentlyPicked;
         </div>
 
         <Group gap="xs">
-          {/* 👇 view mode toggle */}
           <SegmentedControl
             size="sm"
             value={viewMode}
@@ -388,21 +387,21 @@ const nextPicked = !currentlyPicked;
             ]}
           />
 
-          {/* Keep your existing buttons */}
           <Button onClick={fetchOrders} loading={loading} variant="light">
             Refresh
           </Button>
 
           <Button
-            <Button
-  leftSection={<IconArrowsDownUp size={16} />}
-  onClick={handleSyncOrders}
-  loading={syncing}
-  variant="filled"
-  color="red"
->
-  Run Safe Sync
-</Button>
+            leftSection={<IconArrowsDownUp size={16} />}
+            onClick={handleSyncOrders}
+            loading={syncing}
+            variant="filled"
+            color="red"
+          >
+            Run Safe Sync
+          </Button>
+        </Group>
+      </Group>
 
       {error && (
         <Paper p="sm" withBorder>
@@ -422,7 +421,6 @@ const nextPicked = !currentlyPicked;
         </Paper>
       )}
 
-      {/* 👇 Orders list mode */}
       {viewMode === "orders" && (
         <Paper withBorder radius="md" p={0}>
           <ScrollArea h={500}>
@@ -449,16 +447,14 @@ const nextPicked = !currentlyPicked;
                 )}
 
                 {orders.map((o) => (
-                  <>
+                  <React.Fragment key={o.id}>
                     <Table.Tr
-                      key={o.id}
                       onClick={() => toggle(o.id)}
                       style={{ cursor: "pointer" }}
                     >
                       <Table.Td>
                         <Group gap={6}>
                           <Text fw={500}>{o.code}</Text>
-
                           {o.allocated && (
                             <Badge size="xs" color="yellow" variant="filled">
                               Allocated
@@ -504,15 +500,8 @@ const nextPicked = !currentlyPicked;
                     </Table.Tr>
 
                     {expanded === o.id && (
-                      <Table.Tr key={`${o.id}-expanded`}>
-                        <Table.Td
-                          colSpan={7}
-                          style={{
-                            background: "#111",
-                            padding: 0,
-                            borderTop: "2px solid #333",
-                          }}
-                        >
+                      <Table.Tr>
+                        <Table.Td colSpan={7} style={{ background: "#111", padding: 0 }}>
                           <Box p="md">
                             {!itemsByOrder[o.id] && (
                               <Group justify="center" p="lg">
@@ -520,130 +509,100 @@ const nextPicked = !currentlyPicked;
                               </Group>
                             )}
 
-                            {itemsByOrder[o.id] &&
-                              itemsByOrder[o.id].length === 0 && (
-                                <Text c="dimmed" ta="center">
-                                  No line items found.
-                                </Text>
-                              )}
+                            {itemsByOrder[o.id]?.length === 0 && (
+                              <Text c="dimmed" ta="center">
+                                No line items found.
+                              </Text>
+                            )}
 
-                            {itemsByOrder[o.id] &&
-                              itemsByOrder[o.id].length > 0 && (
-                                <Stack gap="md">
-                                  {sortOrderItems(itemsByOrder[o.id]).map(
-                                    (it, idx) => {
-                                      const ctId =
-                                        typeof it.cardTraderId === "number"
-                                          ? it.cardTraderId
-                                          : undefined;
-                                      const pickedKey =
-  typeof it.id === "number" ? it.id : ctId;
+                            {!!itemsByOrder[o.id]?.length && (
+                              <Stack gap="md">
+                                {sortOrderItems(itemsByOrder[o.id]).map((it, idx) => {
+                                  const ctId =
+                                    typeof it.cardTraderId === "number"
+                                      ? it.cardTraderId
+                                      : undefined;
 
-const isPicked =
-  pickedKey !== undefined &&
-  !!pickedMap[o.id]?.[pickedKey];
+                                  const pickedKey =
+                                    typeof it.id === "number" ? it.id : ctId;
 
-                                      return (
-                                        <Group
-                                          key={idx}
-                                          align="flex-start"
-                                          wrap="nowrap"
-                                          style={{
-                                            padding: "8px 0",
-                                            borderBottom:
-                                              "1px solid #333",
-                                            background: isPicked
-                                              ? "rgba(46, 204, 113, 0.12)"
-                                              : "transparent",
-                                            borderLeft: isPicked
-                                              ? "3px solid #2ecc71"
-                                              : "3px solid transparent",
-                                            borderRadius: 4,
-                                          }}
-                                        >
-                                          <img
-                                            src={getCardImageSrc(it)}
-                                            width={50}
-                                            height={70}
-                                            style={{
-                                              objectFit: "cover",
-                                              borderRadius: 4,
-                                            }}
-                                            onError={(e) => {
-                                              (
-                                                e.target as HTMLImageElement
-                                              ).src = "/card-placeholder.png";
-                                            }}
-                                          />
+                                  const isPicked =
+                                    pickedKey !== undefined &&
+                                    !!pickedMap[o.id]?.[pickedKey];
 
-                                          <Box style={{ flex: 1 }}>
-                                            <Text fw={500}>
-  {it.name || "No name"}
-</Text>
-<Text size="xs" c="dimmed">
-  {it.set_name || "Unknown set"}
-</Text>
+                                  return (
+                                    <Group key={idx} align="flex-start" wrap="nowrap">
+                                      <img
+                                        src={getCardImageSrc(it)}
+                                        width={50}
+                                        height={70}
+                                        style={{ objectFit: "cover", borderRadius: 4 }}
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).src =
+                                            "/card-placeholder.png";
+                                        }}
+                                      />
 
-<Group gap={6} mt={6}>
-  <Badge
-    size="sm"
-    color={it.isFoil ? "yellow" : "gray"}
-    variant={it.isFoil ? "filled" : "light"}
-  >
-    {it.isFoil ? "Foil" : "Non-Foil"}
-  </Badge>
+                                      <Box style={{ flex: 1 }}>
+                                        <Text fw={500}>{it.name || "No name"}</Text>
+                                        <Text size="xs" c="dimmed">
+                                          {it.set_name || "Unknown set"}
+                                        </Text>
 
-  {it.condition && (
-    <Badge size="sm" variant="light" color="blue">
-      {it.condition}
-    </Badge>
-  )}
-</Group>
-
-                                            <Text size="sm" mt={4}>
-                                              Qty: {it.quantity ?? "?"}
-                                            </Text>
-
-                                            <Group gap={6} mt={6}>
-  {it.binLocations && it.binLocations.length > 0 ? (
-    it.binLocations.map((b, i) => (
-      <Badge key={i} color="yellow">
-        {b.bin ?? "?"} / Row {b.row ?? "?"} (x{b.quantity ?? "?"})
-      </Badge>
-    ))
-  ) : (
-    <Badge color="red" variant="light">
-      Unassigned
-    </Badge>
-  )}
-</Group>
-                                          </Box>
-
-                                          <Button
-                                            size="xs"
-                                            variant={
-                                              isPicked ? "filled" : "outline"
-                                            }
-                                            color={isPicked ? "green" : "gray"}
-                                            onClick={() =>
-                                              handleTogglePicked(o.id, it)
-                                            }
+                                        <Group gap={6} mt={6}>
+                                          <Badge
+                                            size="sm"
+                                            color={it.isFoil ? "yellow" : "gray"}
+                                            variant={it.isFoil ? "filled" : "light"}
                                           >
-                                            {isPicked
-                                              ? "Picked"
-                                              : "Mark picked"}
-                                          </Button>
+                                            {it.isFoil ? "Foil" : "Non-Foil"}
+                                          </Badge>
+
+                                          {it.condition && (
+                                            <Badge size="sm" variant="light" color="blue">
+                                              {it.condition}
+                                            </Badge>
+                                          )}
                                         </Group>
-                                      );
-                                    }
-                                  )}
-                                </Stack>
-                              )}
+
+                                        <Text size="sm" mt={4}>
+                                          Qty: {it.quantity ?? "?"}
+                                        </Text>
+
+                                        <Group gap={6} mt={6}>
+                                          {it.binLocations?.length ? (
+                                            it.binLocations.map((b, i) => (
+                                              <Badge key={i} color="yellow">
+                                                {b.bin ?? "?"} / Row {b.row ?? "?"} (x
+                                                {b.quantity ?? "?"})
+                                              </Badge>
+                                            ))
+                                          ) : (
+                                            <Badge color="red" variant="light">
+                                              Unassigned
+                                            </Badge>
+                                          )}
+                                        </Group>
+                                      </Box>
+
+                                      <Button
+                                        size="xs"
+                                        variant={isPicked ? "filled" : "outline"}
+                                        color={isPicked ? "green" : "gray"}
+                                        onClick={() => handleTogglePicked(o.id, it)}
+                                      >
+                                        {isPicked ? "Picked" : "Mark picked"}
+                                      </Button>
+                                    </Group>
+                                  );
+                                })}
+                              </Stack>
+                            )}
                           </Box>
                         </Table.Td>
                       </Table.Tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </Table.Tbody>
             </Table>
@@ -651,7 +610,6 @@ const isPicked =
         </Paper>
       )}
 
-      {/* 👇 Daily sales mode */}
       {viewMode === "daily" && <OrdersDailyView />}
     </Stack>
   );

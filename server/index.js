@@ -15,6 +15,7 @@ import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
+import manapoolRouter from "./routes/manapool.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -40,6 +41,9 @@ app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
 
+// Mana Pool routes
+app.use("/api/manapool", manapoolRouter);
+
 // ===================================================================
 // ORDER SYNC DISABLED ON STARTUP
 // ===================================================================
@@ -50,6 +54,8 @@ app.use("/api/order-allocations", orderAllocationsRouter);
 //
 // To sync orders manually later, run:
 // POST http://localhost:3000/api/orders/sync
+//
+// Mana Pool sync will also be manual until we intentionally add polling.
 // ===================================================================
 
 // ===================================================================
@@ -69,6 +75,7 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
       console.log("⚠️ Order auto-sync is DISABLED. No allocations will run on startup.");
+      console.log("✅ Mana Pool routes mounted at /api/manapool");
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);

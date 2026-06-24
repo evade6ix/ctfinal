@@ -88,30 +88,68 @@ export function OrdersView() {
     Record<string | number, Record<number, boolean>>
   >({});
 
-  const fetchOrders = async () => {
-    try {
-      setLoading(true);
-      setError(null);
+ const fetchOrders = async () => {
+  try {
+    setLoading(true);
+    setError(null);
 
-      const res = await fetch("/api/orders");
-      if (!res.ok) throw new Error("Failed to load orders");
+    const res = await fetch("/api/manapool/orders?limit=50");
+    if (!res.ok) throw new Error("Failed to load Mana Pool orders");
 
-      const data: OrderSummary[] = await res.json();
+    const payload = await res.json();
 
-      // ✅ Only keep HUB_PENDING (Zero) orders in this view
-      const zeroOrders = (data || []).filter(
-        (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
-      );
+    const manaPoolOrders = payload?.data?.orders || [];
 
-      setOrders(zeroOrders);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Failed to load orders");
-    } finally {
-      setLoading(false);
-    }
-  };
+    const normalizedOrders: OrderSummary[] = manaPoolOrders.map((o: any) => ({
+      id: o.id,
+      code: o.number || o.code || String(o.id),
+      state: o.status || o.state || "unknown",
+      orderAs: "Mana Pool",
+      buyer: {
+        username:
+          o.buyer?.username ||
+          o.buyer?.name ||
+          o.customer?.name ||
+          o.customer_name ||
+          "Unknown",
+        country:
+          o.buyer?.country ||
+          o.customer?.country ||
+          o.shipping_address?.country ||
+          "",
+      },
+      size:
+        o.items_count ||
+        o.line_items_count ||
+        o.quantity ||
+        o.items?.length ||
+        o.line_items?.length ||
+        0,
+      createdAt: o.created_at || o.createdAt || o.inserted_at || null,
+      sellerTotalCents:
+        o.seller_total_cents ||
+        o.total_cents ||
+        o.subtotal_cents ||
+        null,
+      sellerTotalCurrency:
+        o.seller_total_currency ||
+        o.currency ||
+        "USD",
+      formattedTotal:
+        o.formatted_total ||
+        o.total_formatted ||
+        null,
+      allocated: false,
+    }));
 
+    setOrders(normalizedOrders);
+  } catch (err: any) {
+    console.error(err);
+    setError(err.message || "Failed to load Mana Pool orders");
+  } finally {
+    setLoading(false);
+  }
+};
   useEffect(() => {
     fetchOrders();
   }, []);
@@ -157,36 +195,95 @@ for (const alloc of data) {
   };
 
   const loadItems = async (orderId: string | number) => {
-    if (itemsByOrder[orderId]) {
-      // Items already cached, but we might still want latest picked state
-      await loadPickStateForOrder(orderId);
-      return;
+  if (itemsByOrder[orderId]) {
+    return;
+  }
+
+  try {
+    const res = await fetch(
+      `/api/manapool/orders/${encodeURIComponent(String(orderId))}`
+    );
+
+    if (!res.ok) {
+      throw new Error(`Failed to load Mana Pool order items: ${res.status}`);
     }
 
-    try {
-      const res = await fetch(`/api/order-articles/${orderId}`);
+    const payload = await res.json();
 
-      if (!res.ok) {
-        throw new Error(`Failed to load order items: ${res.status}`);
-      }
+    const order = payload?.data || payload;
 
-      const data: OrderItem[] = await res.json();
+    const rawItems =
+      order?.items ||
+      order?.line_items ||
+      order?.order_items ||
+      order?.articles ||
+      [];
 
-      setItemsByOrder((prev) => ({
-        ...prev,
-        [orderId]: data,
-      }));
+    const normalizedItems: OrderItem[] = rawItems.map((it: any) => ({
+      id: it.id || it.order_item_id || it.line_item_id,
 
-      // After loading items, also load pick state
-      await loadPickStateForOrder(orderId);
-    } catch (err) {
-      console.error("Failed loading order items", err);
-      setItemsByOrder((prev) => ({
-        ...prev,
-        [orderId]: [],
-      }));
-    }
-  };
+      // Mana Pool fields / generic fields
+      name:
+        it.name ||
+        it.product_name ||
+        it.card_name ||
+        it.title ||
+        it.product?.name ||
+        "No name",
+
+      quantity:
+        it.quantity ||
+        it.qty ||
+        it.count ||
+        1,
+
+      imageUrl:
+        it.image_url ||
+        it.imageUrl ||
+        it.product?.image_url ||
+        it.product?.imageUrl ||
+        null,
+
+      set_name:
+        it.set_name ||
+        it.setName ||
+        it.expansion_name ||
+        it.product?.set_name ||
+        it.product?.expansion_name ||
+        "Unknown set",
+
+      condition:
+        it.condition ||
+        it.condition_name ||
+        it.product?.condition ||
+        null,
+
+      isFoil:
+        Boolean(
+          it.is_foil ||
+            it.isFoil ||
+            it.foil ||
+            it.finish === "foil" ||
+            it.product?.is_foil ||
+            it.product?.foil
+        ),
+
+      // No bin logic yet. That comes after we connect Mana Pool SKUs to inventoryItems.
+      binLocations: [],
+    }));
+
+    setItemsByOrder((prev) => ({
+      ...prev,
+      [orderId]: normalizedItems,
+    }));
+  } catch (err) {
+    console.error("Failed loading Mana Pool order items", err);
+    setItemsByOrder((prev) => ({
+      ...prev,
+      [orderId]: [],
+    }));
+  }
+};
 
   // ⭐ FIXED IMAGE SELECTOR – supports BOTH imageUrl + image_url ⭐
   const getCardImageSrc = (it: OrderItem) => {
@@ -197,15 +294,8 @@ for (const alloc of data) {
       return dbImage;
     }
 
-    // 2) Fallback → CardTrader Blueprint CDN
-    const blueprintId = it.blueprintId ?? it.cardTraderId;
-    if (blueprintId) {
-      return `https://img.cardtrader.com/blueprints/${blueprintId}/front.jpg`;
-    }
-
-    // 3) Final fallback → local placeholder
-    return "/card-placeholder.png";
-  };
+    // Final fallback → local placeholder
+return "/card-placeholder.png";
 
   const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
@@ -370,9 +460,8 @@ const nextPicked = !currentlyPicked;
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-            CardTrader <strong>HUB_PENDING (Zero)</strong> seller orders only.
-            Expand an order to view line items, or switch to Daily Sales.
-          </Text>
+  Mana Pool seller orders. Expand an order to view line items, or switch to Daily Sales.
+</Text>
         </div>
 
         <Group gap="xs">
@@ -440,7 +529,7 @@ const nextPicked = !currentlyPicked;
                 {!loading && orders.length === 0 && (
                   <Table.Tr>
                     <Table.Td colSpan={7} ta="center">
-                      <Text c="dimmed">No HUB_PENDING orders found.</Text>
+                      <Text c="dimmed">No Mana Pool orders found.</Text>
                     </Table.Td>
                   </Table.Tr>
                 )}

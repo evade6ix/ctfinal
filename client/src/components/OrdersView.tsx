@@ -285,19 +285,17 @@ for (const alloc of data) {
   }
 };
 
-  // ⭐ FIXED IMAGE SELECTOR – supports BOTH imageUrl + image_url ⭐
   const getCardImageSrc = (it: OrderItem) => {
-    // 1) Prefer camelCase (future /api/orders items) then snake_case (/api/order-articles)
-    const dbImage = it.imageUrl || it.image_url;
+  const dbImage = it.imageUrl || it.image_url;
 
-    if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
-      return dbImage;
-    }
+  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+    return dbImage;
+  }
 
-    // Final fallback → local placeholder
-return "/card-placeholder.png";
+  return "/card-placeholder.png";
+};
 
-  const toggle = (id: string | number) => {
+const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
     setExpanded(willExpand ? id : null);
     if (willExpand) loadItems(id);

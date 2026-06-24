@@ -512,13 +512,16 @@ number:
     if (staged.length === 0) return;
 
     const items = staged
-      .map((x) => ({
-        blueprintId: x.blueprintId,
-        quantity: x.quantity,
-        price: x.price,
-        condition: x.condition,
-        foil: x.foil,
-      }))
+  .map((x) => ({
+    blueprintId: x.blueprintId,
+    name: x.name,
+    setName: x.setName,
+    setCode: x.setCode,
+    quantity: x.quantity,
+    price: x.price,
+    condition: x.condition,
+    foil: x.foil,
+  }))
       .filter((x) => {
         const okId = !!x.blueprintId;
         const okQty = Number.isFinite(x.quantity) && x.quantity > 0;
@@ -782,7 +785,7 @@ number:
                 disabled={staged.length === 0 || pushing}
                 loading={pushing}
               >
-                Push Live (CT)
+                Push Live (CT + Mana Pool)
               </Button>
               <Button
                 size="xs"

@@ -4,6 +4,7 @@ import { InventoryItem } from "../models/InventoryItem.js";
 import { ChangeLog } from "../models/ChangeLog.js";
 import { applyStagedToInventory } from "../utils/applyStagedToInventory.js";
 import { SyncState } from "../models/SyncState.js";
+import { syncInventoryItemsToManaPool } from "../services/manapoolInventorySync.js";
 
 const router = express.Router();
 
@@ -289,29 +290,29 @@ console.log("CT /products response:", JSON.stringify(data, null, 2));
         });
 
         // 2) Reflect this staged listing into Mongo inventory + bins
-        if (cardTraderId != null) {
-          try {
-            // ✅ Reuse the SAME helper as /debug/apply so behavior matches
-            const stagedForMongo = {
-  cardTraderId,
-  blueprintId,
-  name: it.name || "Unknown",
-  setCode: it.setCode || null,
-  game: it.gameId || it.game || null,
-  condition,
-  isFoil: !!it.foil,
-  quantity: intQty,
-  price: roundedPrice,
-};
+if (cardTraderId != null) {
+  try {
+    // ✅ Reuse the SAME helper as /debug/apply so behavior matches
+    const stagedForMongo = {
+      cardTraderId,
+      blueprintId,
+      name: it.name || "Unknown",
+      setCode: it.setCode || null,
+      game: it.gameId || it.game || null,
+      condition,
+      isFoil: !!it.foil,
+      quantity: intQty,
+      price: roundedPrice,
+    };
 
-            await applyStagedToInventory(stagedForMongo, binId, numericRow);
-          } catch (dbErr) {
-            console.error("❌ Failed to sync to Mongo inventoryItems in push-all", {
-              cardTraderId,
-              error: dbErr?.message || dbErr,
-            });
-          }
-        }
+    await applyStagedToInventory(stagedForMongo, binId, numericRow);
+  } catch (dbErr) {
+    console.error("❌ Failed to sync to Mongo inventoryItems in push-all", {
+      cardTraderId,
+      error: dbErr?.message || dbErr,
+    });
+  }
+}
             } catch (err) {
         console.error("CT CREATE FAILED >>>", {
           blueprintId,

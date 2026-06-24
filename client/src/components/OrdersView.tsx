@@ -57,14 +57,6 @@ type OrderItem = {
   isFoil?: boolean;
   condition?: string | null;
 };
-type AllocationPickState = {
-  orderId: string;
-  orderItemId?: number;
-  cardTraderId: number;
-  picked: boolean;
-  pickedAt?: string | null;
-  pickedBy?: string | null;
-};
 
 export function OrdersView() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
@@ -153,46 +145,6 @@ export function OrdersView() {
   useEffect(() => {
     fetchOrders();
   }, []);
-
-  const loadPickStateForOrder = async (orderId: string | number) => {
-    try {
-      const res = await fetch(
-        `/api/order-allocations/by-order/${encodeURIComponent(
-          String(orderId)
-        )}`
-      );
-
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        console.error(
-          `Failed to load pick state for order ${orderId}: ${res.status}`,
-          txt.slice(0, 300)
-        );
-        return;
-      }
-
-      const data: AllocationPickState[] = await res.json();
-
-      const perLine: Record<number, boolean> = {};
-for (const alloc of data) {
-  const key =
-    typeof alloc.orderItemId === "number"
-      ? alloc.orderItemId
-      : alloc.cardTraderId;
-
-  if (typeof key === "number") {
-    perLine[key] = !!alloc.picked;
-  }
-}
-
-      setPickedMap((prev) => ({
-        ...prev,
-        [orderId]: perLine,
-      }));
-    } catch (err) {
-      console.error("Error loading pick state for order", orderId, err);
-    }
-  };
 
   const loadItems = async (orderId: string | number) => {
   if (itemsByOrder[orderId]) {

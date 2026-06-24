@@ -223,7 +223,9 @@ if (!Number.isFinite(numericRow) || numericRow < 1) {
     for (const it of items) {
       const blueprintId = Number(it.blueprintId);
       const qty = Number(it.quantity);
-      const price = it.price == null ? null : Number(it.price);
+      // Stage sends price in cents, example: 1000 = $10.00, 10000 = $100.00
+const rawPriceCents = it.price == null ? null : Number(it.price);
+const price = Number.isFinite(rawPriceCents) ? rawPriceCents / 100 : null;
 
       if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
         results.push({ ok: false, reason: "Invalid blueprintId", item: it });
@@ -282,17 +284,13 @@ const cardTraderId = Number.isFinite(Number(ctProductIdRaw))
 console.log("CT /products response:", JSON.stringify(data, null, 2));
 
 
-        results.push({
-          ok: true,
-          blueprintId,
-          cardTraderId,
-          response: data,
-        });
-
         // 2) Reflect this staged listing into Mongo inventory + bins
+// 3) Immediately push the same Mongo item to Mana Pool
+let mongoInventoryItem = null;
+let manaPoolResult = null;
+
 if (cardTraderId != null) {
   try {
-    // ✅ Reuse the SAME helper as /debug/apply so behavior matches
     const stagedForMongo = {
       cardTraderId,
       blueprintId,
@@ -305,14 +303,115 @@ if (cardTraderId != null) {
       price: roundedPrice,
     };
 
-    await applyStagedToInventory(stagedForMongo, binId, numericRow);
-  } catch (dbErr) {
-    console.error("❌ Failed to sync to Mongo inventoryItems in push-all", {
+    mongoInventoryItem = await applyStagedToInventory(
+      stagedForMongo,
+      binId,
+      numericRow
+    );
+
+    if (mongoInventoryItem) {
+      manaPoolResult = await syncInventoryItemsToManaPool(mongoInventoryItem, {
+        livePush: true,
+      });
+
+      console.log(
+        "MANA POOL PUSH RESULT >>>",
+        JSON.stringify(
+          {
+            cardTraderId,
+            inventoryItemId: mongoInventoryItem._id?.toString?.(),
+            ok: manaPoolResult?.ok,
+            livePush: manaPoolResult?.livePush,
+            attempted: manaPoolResult?.attempted,
+            payloadCount: manaPoolResult?.payloadCount,
+            synced: manaPoolResult?.synced,
+            mongoUpdated: manaPoolResult?.mongoUpdated,
+            skippedBeforePush: manaPoolResult?.skippedBeforePush,
+            skippedByManaPool: manaPoolResult?.skippedByManaPool,
+          },
+          null,
+          2
+        )
+      );
+
+      const manaPoolFailed =
+        !manaPoolResult?.ok ||
+        manaPoolResult.payloadCount === 0 ||
+        manaPoolResult.synced === 0 ||
+        manaPoolResult.mongoUpdated === 0 ||
+        manaPoolResult.skippedBeforePush?.length > 0 ||
+        manaPoolResult.skippedByManaPool?.length > 0;
+
+      if (manaPoolFailed) {
+        await InventoryItem.updateOne(
+          { _id: mongoInventoryItem._id },
+          {
+            $set: {
+              "manapool.lastSyncError": JSON.stringify({
+                ok: manaPoolResult?.ok,
+                livePush: manaPoolResult?.livePush,
+                attempted: manaPoolResult?.attempted,
+                payloadCount: manaPoolResult?.payloadCount,
+                synced: manaPoolResult?.synced,
+                mongoUpdated: manaPoolResult?.mongoUpdated,
+                skippedBeforePush: manaPoolResult?.skippedBeforePush,
+                skippedByManaPool: manaPoolResult?.skippedByManaPool,
+              }),
+            },
+          }
+        );
+      }
+    }
+  } catch (syncErr) {
+    console.error("❌ Failed to sync pushed CT item to Mongo/Mana Pool", {
       cardTraderId,
-      error: dbErr?.message || dbErr,
+      error: syncErr?.response?.data || syncErr?.message || syncErr,
     });
+
+    manaPoolResult = {
+      ok: false,
+      error:
+        syncErr?.response?.data ||
+        syncErr?.message ||
+        "Mana Pool sync failed",
+    };
+
+    if (mongoInventoryItem?._id) {
+      await InventoryItem.updateOne(
+        { _id: mongoInventoryItem._id },
+        {
+          $set: {
+            "manapool.lastSyncError":
+              typeof manaPoolResult.error === "string"
+                ? manaPoolResult.error
+                : JSON.stringify(manaPoolResult.error),
+          },
+        }
+      );
+    }
   }
 }
+
+results.push({
+  ok: true,
+  blueprintId,
+  cardTraderId,
+  inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
+  manapool: manaPoolResult
+    ? {
+        ok: manaPoolResult.ok,
+        attempted: manaPoolResult.attempted,
+        payloadCount: manaPoolResult.payloadCount,
+        synced: manaPoolResult.synced,
+        mongoUpdated: manaPoolResult.mongoUpdated,
+        skippedBeforePush: manaPoolResult.skippedBeforePush,
+        skippedByManaPool: manaPoolResult.skippedByManaPool,
+        error: manaPoolResult.error || null,
+      }
+    : null,
+  response: data,
+});
+
             } catch (err) {
         console.error("CT CREATE FAILED >>>", {
           blueprintId,

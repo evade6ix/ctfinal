@@ -320,9 +320,9 @@ export async function syncInventoryItemsToManaPool(inventoryItems, options = {})
     if (!item.setCode) issues.push("Missing setCode");
     if (!conditionId) issues.push(`Could not map condition: ${item.condition}`);
 
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      issues.push("Quantity is zero/invalid");
-    }
+    if (!Number.isInteger(quantity) || quantity < 0) {
+  issues.push("Quantity is invalid");
+}
 
     if (!Number.isInteger(priceCents) || priceCents <= 0) {
       issues.push("Price is missing/invalid");

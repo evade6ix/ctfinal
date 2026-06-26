@@ -4,6 +4,7 @@ import { OrderAllocation } from "../models/OrderAllocation.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { allocateFromBins } from "../utils/allocateFromBins.js";
 import { ct } from "../ctClient.js";
+import { syncInventoryItemsToManaPool } from "../services/manapoolInventorySync.js";
 
 const router = express.Router();
 
@@ -308,13 +309,72 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
       }
 
       invItem.locations = remainingLocations;
-      invItem.totalQuantity = Math.max(
-        0,
-        Number(invItem.totalQuantity || 0) - totalPicked
-      );
-      await invItem.save();
+invItem.totalQuantity = Math.max(
+  0,
+  Number(invItem.totalQuantity || 0) - totalPicked
+);
 
-      await OrderAllocation.create({
+await invItem.save();
+
+try {
+  const manaPoolResult = await syncInventoryItemsToManaPool(invItem, {
+    livePush: true,
+  });
+
+  console.log("✅ [ALLOCATIONS] ManaPool quantity synced after CardTrader sale", {
+    orderId: orderIdStr,
+    orderItemId,
+    cardTraderId,
+    inventoryItemId: invItem._id?.toString?.(),
+    newQuantity: invItem.totalQuantity,
+    ok: manaPoolResult?.ok,
+    payloadCount: manaPoolResult?.payloadCount,
+    synced: manaPoolResult?.synced,
+    mongoUpdated: manaPoolResult?.mongoUpdated,
+    skippedBeforePush: manaPoolResult?.skippedBeforePush,
+    skippedByManaPool: manaPoolResult?.skippedByManaPool,
+  });
+
+  if (
+    !manaPoolResult?.ok ||
+    manaPoolResult?.payloadCount === 0 ||
+    manaPoolResult?.synced === 0 ||
+    manaPoolResult?.skippedBeforePush?.length > 0 ||
+    manaPoolResult?.skippedByManaPool?.length > 0
+  ) {
+    invItem.manapool = invItem.manapool || {};
+    invItem.manapool.lastSyncError = JSON.stringify({
+      source: "cardtrader_sale_allocation",
+      orderId: orderIdStr,
+      orderItemId,
+      cardTraderId,
+      newQuantity: invItem.totalQuantity,
+      result: manaPoolResult,
+    });
+
+    await invItem.save();
+  }
+} catch (manaPoolErr) {
+  console.error("❌ [ALLOCATIONS] Failed to sync ManaPool after CardTrader sale", {
+    orderId: orderIdStr,
+    orderItemId,
+    cardTraderId,
+    inventoryItemId: invItem._id?.toString?.(),
+    error: manaPoolErr?.response?.data || manaPoolErr?.message || manaPoolErr,
+  });
+
+  invItem.manapool = invItem.manapool || {};
+  invItem.manapool.lastSyncError =
+    typeof manaPoolErr?.response?.data === "string"
+      ? manaPoolErr.response.data
+      : JSON.stringify(
+          manaPoolErr?.response?.data || manaPoolErr?.message || manaPoolErr
+        );
+
+  await invItem.save();
+}
+
+await OrderAllocation.create({
         orderId: orderIdStr,
         orderCode: orderCodeStr,
         orderItemId,

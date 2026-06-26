@@ -25,6 +25,32 @@ const pickedLocationSchema = new mongoose.Schema(
 
 const orderAllocationSchema = new mongoose.Schema(
   {
+    source: {
+      type: String,
+      enum: ["cardtrader", "manapool"],
+      default: "cardtrader",
+      index: true,
+    },
+
+    inventoryItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InventoryItem",
+      default: null,
+      index: true,
+    },
+
+    marketplaceOrderItemId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
+    manapoolInventoryId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
     orderId: {
       type: String,
       required: true,
@@ -42,10 +68,11 @@ const orderAllocationSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Sold CardTrader listing/product ID from the order line
+        // Sold CardTrader listing/product ID from the order line when known.
+    // ManaPool manual-review allocations may not have this yet.
     cardTraderId: {
       type: Number,
-      required: true,
+      default: null,
       index: true,
     },
 
@@ -86,7 +113,7 @@ const orderAllocationSchema = new mongoose.Schema(
     },
 
     // allocated = inventory was deducted
-    // manual_review = exact CardTrader ID missing / not enough stock, no deduction
+    // manual_review = exact marketplace item missing / not enough stock, no deduction
     // restored = inventory was restored later
     // cancelled = order/allocation cancelled without active deduction
     // shipped = kept for history after shipment
@@ -119,8 +146,11 @@ const orderAllocationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One allocation/review record per exact CardTrader order line
-orderAllocationSchema.index({ orderId: 1, orderItemId: 1 }, { unique: true });
+// One allocation/review record per exact marketplace order line
+orderAllocationSchema.index(
+  { source: 1, orderId: 1, orderItemId: 1 },
+  { unique: true }
+);
 
 // Helpful lookup for older UI/search flows
 orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 });

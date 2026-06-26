@@ -17,6 +17,9 @@ import weeklyOrdersRouter from "./routes/orders-weekly.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
 import manapoolRouter from "./routes/manapool.js";
 
+// Auto-sync worker
+import { startOrderAutoSyncWorker } from "./services/orderAutoSyncWorker.js";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -45,17 +48,21 @@ app.use("/api/order-allocations", orderAllocationsRouter);
 app.use("/api/manapool", manapoolRouter);
 
 // ===================================================================
-// ORDER SYNC DISABLED ON STARTUP
+// ORDER AUTO-SYNC
 // ===================================================================
-// Do NOT auto-run /api/orders/sync on server start.
-// Do NOT poll CardTrader orders automatically.
-// This prevents old open CardTrader orders from being allocated against
-// newly rebuilt Mongo inventory after a wipe/reset.
+// Controlled by .env:
 //
-// To sync orders manually later, run:
-// POST http://localhost:3000/api/orders/sync
+// ORDER_AUTO_SYNC_ENABLED=true
+// ORDER_AUTO_SYNC_INTERVAL_MS=60000
+// ORDER_AUTO_SYNC_RUN_ON_STARTUP=true
 //
-// Mana Pool sync will also be manual until we intentionally add polling.
+// CARDTRADER_AUTO_SYNC_ENABLED=true
+// MANAPOOL_AUTO_SYNC_ENABLED=true
+//
+// Safety:
+// - CardTrader sync uses /api/orders/sync, which only reconciles eligible orders.
+// - ManaPool sync uses OrderAllocation dedupe so lines are not deducted twice.
+// - Cutoffs prevent old orders from touching rebuilt inventory.
 // ===================================================================
 
 // ===================================================================
@@ -74,8 +81,11 @@ async function start() {
 
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
-      console.log("⚠️ Order auto-sync is DISABLED. No allocations will run on startup.");
       console.log("✅ Mana Pool routes mounted at /api/manapool");
+
+      startOrderAutoSyncWorker({
+        port: PORT,
+      });
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);

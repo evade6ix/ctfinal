@@ -43,8 +43,10 @@ type OrderSummary = {
 };
 
 type OrderItem = {
-  id?: number;
-  cardTraderId?: number;
+  id?: number | string;
+  marketplaceOrderItemId?: string;
+  cardTraderId?: number | null;
+  manapoolInventoryId?: string | null;
   blueprintId?: number;
   name?: string;
   quantity?: number;
@@ -53,10 +55,99 @@ type OrderItem = {
   set_name?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
 
-  // 👇 ADD THIS
+  picked?: boolean;
+  pickedAt?: string | null;
+  pickedBy?: string | null;
+
+  source?: "manapool" | "cardtrader";
+
   isFoil?: boolean;
   condition?: string | null;
 };
+
+type OrderAllocation = {
+  _id?: string;
+  source?: "manapool" | "cardtrader";
+  orderId?: string;
+  orderItemId?: number;
+  marketplaceOrderItemId?: string | null;
+  cardTraderId?: number | null;
+  manapoolInventoryId?: string | null;
+  requestedQuantity?: number;
+  fulfilledQuantity?: number;
+  unfilled?: number;
+  name?: string;
+  condition?: string | null;
+  isFoil?: boolean;
+  picked?: boolean;
+  pickedAt?: string | null;
+  pickedBy?: string | null;
+  status?: string;
+  failureReason?: string | null;
+  pickedLocations?: {
+    bin?: any;
+    row?: number;
+    quantity?: number;
+  }[];
+};
+
+function getManaPoolLineRawId(it: any, index: number) {
+  return (
+    it?.id ??
+    it?.order_item_id ??
+    it?.order_line_id ??
+    it?.line_id ??
+    it?.uuid ??
+    it?.seller_order_item_id ??
+    `line-${index + 1}`
+  );
+}
+
+function getManaPoolNumericOrderItemId(it: any, index: number) {
+  const raw = getManaPoolLineRawId(it, index);
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : index + 1;
+}
+
+function getManaPoolMarketplaceOrderItemId(it: any, index: number) {
+  return String(getManaPoolLineRawId(it, index));
+}
+
+function getManaPoolInventoryId(it: any) {
+  const raw =
+    it?.inventory_id ??
+    it?.seller_inventory_id ??
+    it?.inventory?.id ??
+    it?.seller_inventory?.id ??
+    it?.inventory_item?.id ??
+    it?.inventory?.inventory_id ??
+    null;
+
+  return raw == null ? null : String(raw);
+}
+
+function allocationToBinLocations(allocation?: OrderAllocation | null) {
+  if (
+    !allocation ||
+    !Array.isArray(allocation.pickedLocations) ||
+    allocation.pickedLocations.length === 0
+  ) {
+    return [];
+  }
+
+  return allocation.pickedLocations.map((pl) => {
+    const binValue =
+      pl.bin && typeof pl.bin === "object"
+        ? pl.bin.label || pl.bin.name || pl.bin._id || "?"
+        : pl.bin || "?";
+
+    return {
+      bin: String(binValue),
+      row: Number(pl.row),
+      quantity: Number(pl.quantity || 0),
+    };
+  });
+}
 
 export function OrdersView() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
@@ -152,77 +243,136 @@ export function OrdersView() {
   }
 
   try {
-    const res = await fetch(
-      `/api/manapool/orders/${encodeURIComponent(String(orderId))}`
-    );
+    const [orderRes, allocationRes] = await Promise.all([
+      fetch(`/api/manapool/orders/${encodeURIComponent(String(orderId))}`),
+      fetch(
+        `/api/order-allocations/by-order/${encodeURIComponent(
+          String(orderId)
+        )}?source=manapool`
+      ),
+    ]);
 
-    if (!res.ok) {
-      throw new Error(`Failed to load Mana Pool order items: ${res.status}`);
+    if (!orderRes.ok) {
+      throw new Error(`Failed to load Mana Pool order items: ${orderRes.status}`);
     }
 
-    const payload = await res.json();
-
-    const order = payload?.data || payload;
+    const payload = await orderRes.json();
+    const order = payload?.data?.order || payload?.data || payload;
 
     const rawItems =
       order?.items ||
       order?.line_items ||
       order?.order_items ||
+      order?.lines ||
+      order?.order_lines ||
+      order?.seller_order_items ||
       order?.articles ||
       [];
 
-    const normalizedItems: OrderItem[] = rawItems.map((it: any) => ({
-      id: it.id || it.order_item_id || it.line_item_id,
+    const allocations: OrderAllocation[] = allocationRes.ok
+      ? await allocationRes.json()
+      : [];
 
-      // Mana Pool fields / generic fields
-      name:
-        it.name ||
-        it.product_name ||
-        it.card_name ||
-        it.title ||
-        it.product?.name ||
-        "No name",
+    const allocationByOrderItemId = new Map<number, OrderAllocation>();
+    const allocationByMarketplaceId = new Map<string, OrderAllocation>();
+    const allocationByManaPoolInventoryId = new Map<string, OrderAllocation>();
 
-      quantity:
-        it.quantity ||
-        it.qty ||
-        it.count ||
-        1,
+    for (const allocation of allocations || []) {
+      if (typeof allocation.orderItemId === "number") {
+        allocationByOrderItemId.set(allocation.orderItemId, allocation);
+      }
 
-      imageUrl:
-        it.image_url ||
-        it.imageUrl ||
-        it.product?.image_url ||
-        it.product?.imageUrl ||
-        null,
+      if (allocation.marketplaceOrderItemId) {
+        allocationByMarketplaceId.set(
+          String(allocation.marketplaceOrderItemId),
+          allocation
+        );
+      }
 
-      set_name:
-        it.set_name ||
-        it.setName ||
-        it.expansion_name ||
-        it.product?.set_name ||
-        it.product?.expansion_name ||
-        "Unknown set",
+      if (allocation.manapoolInventoryId) {
+        allocationByManaPoolInventoryId.set(
+          String(allocation.manapoolInventoryId),
+          allocation
+        );
+      }
+    }
 
-      condition:
-        it.condition ||
-        it.condition_name ||
-        it.product?.condition ||
-        null,
+    const normalizedItems: OrderItem[] = rawItems.map((it: any, index: number) => {
+      const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
+      const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
+      const manapoolInventoryId = getManaPoolInventoryId(it);
 
-      isFoil:
-        Boolean(
-          it.is_foil ||
-            it.isFoil ||
-            it.foil ||
-            it.finish === "foil" ||
-            it.product?.is_foil ||
-            it.product?.foil
-        ),
+      const allocation =
+        allocationByOrderItemId.get(numericOrderItemId) ||
+        allocationByMarketplaceId.get(marketplaceOrderItemId) ||
+        (manapoolInventoryId
+          ? allocationByManaPoolInventoryId.get(manapoolInventoryId)
+          : null) ||
+        null;
 
-      // No bin logic yet. That comes after we connect Mana Pool SKUs to inventoryItems.
-      binLocations: [],
-    }));
+      return {
+        id: numericOrderItemId,
+        marketplaceOrderItemId,
+        source: "manapool",
+        cardTraderId: allocation?.cardTraderId ?? null,
+        manapoolInventoryId,
+
+        name:
+          allocation?.name ||
+          it.name ||
+          it.product_name ||
+          it.card_name ||
+          it.title ||
+          it.product?.name ||
+          "No name",
+
+        quantity:
+          it.quantity ||
+          it.qty ||
+          it.count ||
+          allocation?.requestedQuantity ||
+          1,
+
+        imageUrl:
+          it.image_url ||
+          it.imageUrl ||
+          it.product?.image_url ||
+          it.product?.imageUrl ||
+          null,
+
+        set_name:
+          it.set_name ||
+          it.setName ||
+          it.expansion_name ||
+          it.product?.set_name ||
+          it.product?.expansion_name ||
+          "Unknown set",
+
+        condition:
+          allocation?.condition ??
+          it.condition ??
+          it.condition_name ??
+          it.product?.condition ??
+          null,
+
+        isFoil:
+          allocation?.isFoil ??
+          Boolean(
+            it.is_foil ||
+              it.isFoil ||
+              it.foil ||
+              it.finish === "foil" ||
+              it.product?.is_foil ||
+              it.product?.foil
+          ),
+
+        picked: !!allocation?.picked,
+        pickedAt: allocation?.pickedAt || null,
+        pickedBy: allocation?.pickedBy || null,
+
+        binLocations: allocationToBinLocations(allocation),
+      };
+    });
 
     setItemsByOrder((prev) => ({
       ...prev,

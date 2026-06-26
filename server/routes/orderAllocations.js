@@ -38,49 +38,124 @@ function extractIsFoil(it) {
   );
 }
 
-function buildAllocationFilter({ orderId, orderItemId, cardTraderId }) {
-  if (!orderId) return null;
+function normalizeAllocationSource(source) {
+  if (source === "manapool") return "manapool";
+  if (source === "cardtrader") return "cardtrader";
+  return null;
+}
 
-  if (typeof orderItemId !== "undefined" && orderItemId !== null) {
+function withSourceFilter(baseFilter, source) {
+  if (!source) return baseFilter;
+
+  // Keep old CardTrader allocation docs working if they were created
+  // before source existed on the model.
+  if (source === "cardtrader") {
     return {
-      orderId: String(orderId),
-      orderItemId: Number(orderItemId),
+      ...baseFilter,
+      $or: [{ source: "cardtrader" }, { source: { $exists: false } }],
     };
   }
 
+  return {
+    ...baseFilter,
+    source,
+  };
+}
+
+function buildAllocationFilter({ orderId, orderItemId, cardTraderId, source }) {
+  if (!orderId) return null;
+
+  const normalizedSource = normalizeAllocationSource(source);
+
+  if (typeof orderItemId !== "undefined" && orderItemId !== null) {
+    return withSourceFilter(
+      {
+        orderId: String(orderId),
+        orderItemId: Number(orderItemId),
+      },
+      normalizedSource
+    );
+  }
+
   if (typeof cardTraderId !== "undefined" && cardTraderId !== null) {
-    return {
-      orderId: String(orderId),
-      cardTraderId: Number(cardTraderId),
-    };
+    return withSourceFilter(
+      {
+        orderId: String(orderId),
+        cardTraderId: Number(cardTraderId),
+      },
+      normalizedSource
+    );
   }
 
   return null;
 }
-
 router.get("/by-order/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
+    const source =
+      req.query.source === "manapool"
+        ? "manapool"
+        : req.query.source === "cardtrader"
+        ? "cardtrader"
+        : null;
 
     if (!orderId) {
       return res.status(400).json({ error: "orderId is required" });
     }
 
-    const docs = await OrderAllocation.find({
+    const filter = {
       orderId: String(orderId),
-    }).lean();
+    };
 
-    return res.json(docs || []);
+    if (source) {
+      // Keep legacy CardTrader allocations working even if old docs do not have source set.
+      filter.$or =
+        source === "cardtrader"
+          ? [{ source: "cardtrader" }, { source: { $exists: false } }]
+          : [{ source }];
+    }
+
+    const docs = await OrderAllocation.find(filter)
+      .populate("pickedLocations.bin", "name label rows description")
+      .lean();
+
+    const normalizedDocs = (docs || []).map((doc) => ({
+      ...doc,
+      pickedLocations: Array.isArray(doc.pickedLocations)
+        ? doc.pickedLocations.map((pl) => ({
+            ...pl,
+            bin:
+              pl.bin && typeof pl.bin === "object"
+                ? {
+                    _id: pl.bin._id?.toString?.() || String(pl.bin._id || ""),
+                    name: pl.bin.name || null,
+                    label: pl.bin.label || pl.bin.name || null,
+                    description: pl.bin.description || null,
+                  }
+                : pl.bin || null,
+          }))
+        : [],
+    }));
+
+    return res.json(normalizedDocs);
   } catch (err) {
     console.error("❌ Error in GET /api/order-allocations/by-order:", err);
-    return res.status(500).json({ error: "Failed to load allocations for order" });
+    return res
+      .status(500)
+      .json({ error: "Failed to load allocations for order" });
   }
 });
 
 router.patch("/pick", async (req, res) => {
   try {
-    const { orderId, orderItemId, cardTraderId, pickedBy } = req.body || {};
-    const filter = buildAllocationFilter({ orderId, orderItemId, cardTraderId });
+    const { orderId, orderItemId, cardTraderId, pickedBy, source } =
+      req.body || {};
+    const filter = buildAllocationFilter({
+      orderId,
+      orderItemId,
+      cardTraderId,
+      source,
+    });
 
     if (!filter) {
       return res.status(400).json({
@@ -117,8 +192,13 @@ router.patch("/pick", async (req, res) => {
 
 router.patch("/unpick", async (req, res) => {
   try {
-    const { orderId, orderItemId, cardTraderId } = req.body || {};
-    const filter = buildAllocationFilter({ orderId, orderItemId, cardTraderId });
+    const { orderId, orderItemId, cardTraderId, source } = req.body || {};
+    const filter = buildAllocationFilter({
+      orderId,
+      orderItemId,
+      cardTraderId,
+      source,
+    });
 
     if (!filter) {
       return res.status(400).json({

@@ -4,6 +4,7 @@ import axios from "axios";
 import { ct } from "../ctClient.js";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { OrderAllocation } from "../models/OrderAllocation.js";
+
 const router = express.Router();
 
 /**
@@ -17,6 +18,7 @@ const MAX_SCRYFALL_LOOKUPS_PER_REQUEST = 50;
 
 async function getScryfallImage(cardName) {
   if (!cardName) return null;
+
   try {
     const resp = await axios.get("https://api.scryfall.com/cards/named", {
       params: { exact: cardName, version: "normal" },
@@ -24,6 +26,7 @@ async function getScryfallImage(cardName) {
     });
 
     const data = resp.data || {};
+
     if (data.image_uris) {
       return (
         data.image_uris.normal ||
@@ -35,6 +38,7 @@ async function getScryfallImage(cardName) {
 
     if (Array.isArray(data.card_faces) && data.card_faces.length > 0) {
       const face = data.card_faces[0];
+
       if (face.image_uris) {
         return (
           face.image_uris.normal ||
@@ -50,6 +54,7 @@ async function getScryfallImage(cardName) {
     if (process.env.NODE_ENV !== "production") {
       console.warn("⚠️ Scryfall lookup failed for", cardName);
     }
+
     return null;
   }
 }
@@ -74,11 +79,61 @@ async function getScryfallImageLimited(cardName, ctx) {
   ctx.lookups++;
 
   const url = await getScryfallImage(cardName);
+
   if (url) {
     scryfallCache.set(key, url);
   }
 
   return url;
+}
+
+function toFiniteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getFirstFiniteNumber(...values) {
+  for (const value of values) {
+    const n = toFiniteNumber(value);
+    if (n !== null) return n;
+  }
+
+  return null;
+}
+
+function extractOrderItemId(a) {
+  return getFirstFiniteNumber(
+    a?.id,
+    a?.order_item_id,
+    a?.orderItemId,
+    a?.seller_order_item_id,
+    a?.line_id,
+    a?.lineItemId
+  );
+}
+
+function extractCardTraderId(a) {
+  return getFirstFiniteNumber(
+    a?.product_id,
+    a?.productId,
+    a?.cardTraderId,
+    a?.card_trader_id,
+    a?.seller_product_id,
+    a?.article?.product_id,
+    a?.article?.id,
+    a?.product?.id,
+    a?.product?.product_id
+  );
+}
+
+function extractBlueprintId(a) {
+  return getFirstFiniteNumber(
+    a?.blueprint_id,
+    a?.blueprintId,
+    a?.product?.blueprint_id,
+    a?.product?.blueprintId,
+    a?.blueprint?.id
+  );
 }
 
 function extractIsFoil(a) {
@@ -104,8 +159,69 @@ function extractCondition(item) {
     item?.card_condition ||
     item?.attributes?.condition ||
     item?.properties?.condition ||
+    item?.properties_hash?.condition ||
+    item?.properties_hash?.card_condition ||
     null
   );
+}
+
+function extractSetName(item) {
+  return (
+    item?.expansion ||
+    item?.set_name ||
+    item?.setName ||
+    item?.product?.set_name ||
+    item?.product?.expansion ||
+    null
+  );
+}
+
+function allocationSourceFilter() {
+  return {
+    $or: [{ source: "cardtrader" }, { source: { $exists: false } }],
+  };
+}
+
+function allocationOrderFilter({ orderId, orderCode }) {
+  if (orderCode) {
+    return {
+      $or: [{ orderId }, { orderCode }],
+    };
+  }
+
+  return { orderId };
+}
+
+function getAllocationBinLabel(bin) {
+  if (!bin) return "?";
+
+  if (typeof bin === "object") {
+    return String(bin.label || bin.name || bin._id || bin.id || "?");
+  }
+
+  return String(bin);
+}
+
+function allocationToBinLocations(allocation) {
+  if (
+    !allocation ||
+    !Array.isArray(allocation.pickedLocations) ||
+    allocation.pickedLocations.length === 0
+  ) {
+    return [];
+  }
+
+  return allocation.pickedLocations.map((pl) => ({
+    bin: getAllocationBinLabel(pl.bin),
+    row: pl.row,
+    quantity: pl.quantity,
+  }));
+}
+
+function legacyAllocationKey(cardTraderId, name) {
+  return `${Number(cardTraderId)}_${String(name || "")
+    .trim()
+    .toLowerCase()}`;
 }
 
 /**
@@ -138,6 +254,7 @@ router.get("/image", async (req, res) => {
     if (process.env.NODE_ENV !== "production") {
       console.error("❌ /api/order-articles/image error:", err.message || err);
     }
+
     return res.status(500).json({
       error: "Failed to fetch card image",
     });
@@ -150,9 +267,11 @@ router.get("/image", async (req, res) => {
  * - cardTraderId / blueprintId
  * - quantity
  * - Scryfall image_url
- * - binLocations (from allocations / live allocation)
- * - picked / pickedAt / pickedBy (from OrderAllocation, if present)
+ * - binLocations from saved OrderAllocation.pickedLocations
+ * - picked / pickedAt / pickedBy from saved OrderAllocation
  * - isFoil / condition
+ *
+ * Display route only: this must never allocate or deduct inventory.
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -180,112 +299,116 @@ router.get("/:id", async (req, res) => {
       rawItems = order.items.data;
     }
 
-    if (debug) {
-      return res.json({ order, rawItems });
-    }
+    const orderCodeStr = order.code ? String(order.code) : null;
 
     // 3️⃣ Normalize base items
-    const baseItems = rawItems.map((a) => ({
-      id: a.id,
-      cardTraderId: a.product_id ?? null, // CT listing / product id
-      blueprintId: a.blueprint_id ?? null, // CT blueprint id
-      name: a.name || "Unknown item",
-      quantity: a.quantity ?? 0,
-      set_name: a.expansion || null,
-      image_url: null,
-      binLocations: [],
-      isFoil: extractIsFoil(a),
-      condition: extractCondition(a),
-    }));
+    const baseItems = rawItems.map((a, index) => {
+      const orderItemId = extractOrderItemId(a);
+      const cardTraderId = extractCardTraderId(a);
+
+      return {
+        id: orderItemId ?? a?.id ?? `line-${index + 1}`,
+        orderItemId,
+        cardTraderId,
+        blueprintId: extractBlueprintId(a),
+        name: a?.name || a?.product?.name || "Unknown item",
+        quantity: Number(a?.quantity ?? a?.qty ?? 0) || 0,
+        set_name: extractSetName(a),
+        image_url: null,
+        binLocations: [],
+        isFoil: extractIsFoil(a),
+        condition: extractCondition(a),
+      };
+    });
+
+    // 4️⃣ Load saved allocations by exact order/order code FIRST.
+    // Do not require cardTraderId here: Daily Sales should still show saved bins
+    // when CardTrader's live order payload omits or reshapes product_id.
+    const existingAllocations = await OrderAllocation.find({
+      $and: [
+        allocationOrderFilter({ orderId: orderIdStr, orderCode: orderCodeStr }),
+        allocationSourceFilter(),
+      ],
+    })
+      .populate("pickedLocations.bin", "name label rows description")
+      .exec();
+
+    if (debug) {
+      return res.json({
+        order,
+        rawItems,
+        baseItems,
+        existingAllocationCount: existingAllocations.length,
+        existingAllocations: existingAllocations.map((a) => ({
+          _id: a._id?.toString?.(),
+          source: a.source,
+          orderId: a.orderId,
+          orderCode: a.orderCode,
+          orderItemId: a.orderItemId,
+          cardTraderId: a.cardTraderId,
+          name: a.name,
+          pickedLocations: a.pickedLocations,
+          status: a.status,
+        })),
+      });
+    }
 
     if (!baseItems.length) return res.json([]);
 
-    // 4️⃣ Gather CT IDs
-    const ctIds = baseItems
-      .map((i) => i.cardTraderId)
-      .filter((x) => x != null);
+    const allocationByLine = new Map();
+    const allocationByCardTraderId = new Map();
+    const allocationByLegacy = new Map();
 
-    // If no CT IDs, only images are possible
-    if (!ctIds.length) {
-      const ctx = { lookups: 0 };
+    for (const alloc of existingAllocations) {
+      if (alloc.orderItemId != null) {
+        allocationByLine.set(Number(alloc.orderItemId), alloc);
+      }
 
-      const finalNoCT = await Promise.all(
-        baseItems.map(async (it) => ({
-          ...it,
-          image_url: skipImages
-            ? null
-            : await getScryfallImageLimited(it.name, ctx),
-          binLocations: [],
-          picked: false,
-          pickedAt: null,
-          pickedBy: null,
-        }))
-      );
+      if (alloc.cardTraderId != null) {
+        const ctId = Number(alloc.cardTraderId);
+        if (!allocationByCardTraderId.has(ctId)) {
+          allocationByCardTraderId.set(ctId, alloc);
+        }
 
-      return res.json(finalNoCT);
+        allocationByLegacy.set(legacyAllocationKey(ctId, alloc.name), alloc);
+      }
     }
 
-    // 5️⃣ Inventory items for these CT listing IDs
-    const dbItems = await InventoryItem.find({
-      cardTraderId: { $in: ctIds },
-    })
-      .populate("locations.bin", "name label rows description")
-      .exec();
+    // 5️⃣ Inventory items are only used for image/blueprint fallback, never allocation.
+    const ctIds = baseItems
+      .map((i) => Number(i.cardTraderId))
+      .filter((x) => Number.isFinite(x));
+
+    const dbItems = ctIds.length
+      ? await InventoryItem.find({
+          cardTraderId: { $in: ctIds },
+        })
+          .populate("locations.bin", "name label rows description")
+          .exec()
+      : [];
 
     const inventoryMap = new Map();
     for (const item of dbItems) {
       inventoryMap.set(Number(item.cardTraderId), item);
     }
 
-// 6️⃣ Previous allocations for this order
-// CardTrader Zero weekly shipments can have allocations saved under
-// different numeric order IDs, but they share the same orderCode.
-const orderCodeStr = order.code ? String(order.code) : null;
-
-const existingAllocations = await OrderAllocation.find({
-  ...(orderCodeStr
-    ? { $or: [{ orderId: orderIdStr }, { orderCode: orderCodeStr }] }
-    : { orderId: orderIdStr }),
-  cardTraderId: { $in: ctIds },
-})
-  .populate("pickedLocations.bin", "name label rows description")
-  .exec();
-
-    const allocationMap = new Map();
-
-for (const alloc of existingAllocations) {
-  // New safe key: exact CardTrader order line
-  if (alloc.orderItemId != null) {
-    allocationMap.set(`line:${Number(alloc.orderItemId)}`, alloc);
-  }
-
-  // Legacy key: keeps old allocations working
-  const legacyKey = `${Number(alloc.cardTraderId)}_${String(
-    alloc.name || ""
-  )
-    .trim()
-    .toLowerCase()}`;
-
-  allocationMap.set(`legacy:${legacyKey}`, alloc);
-}
     const ctx = { lookups: 0 };
 
-    // 7️⃣ Build final lines
+    // 6️⃣ Build final lines from saved allocation snapshots.
     const final = await Promise.all(
       baseItems.map(async (it) => {
         const ctId = Number(it.cardTraderId);
-        const requestedQty = Number(it.quantity) || 0;
+        const invItem = Number.isFinite(ctId) ? inventoryMap.get(ctId) : null;
 
-        let invItem = Number.isFinite(ctId)
-  ? inventoryMap.get(ctId)
-  : null;
-
-const legacyKey = `${ctId}_${String(it.name || "").trim().toLowerCase()}`;
-
-const existingAlloc =
-  (it.id != null ? allocationMap.get(`line:${Number(it.id)}`) : null) ||
-  allocationMap.get(`legacy:${legacyKey}`) ||
-  null;
+        const existingAlloc =
+          (it.orderItemId != null
+            ? allocationByLine.get(Number(it.orderItemId))
+            : null) ||
+          (Number.isFinite(ctId) ? allocationByCardTraderId.get(ctId) : null) ||
+          (Number.isFinite(ctId)
+            ? allocationByLegacy.get(legacyAllocationKey(ctId, it.name))
+            : null) ||
+          null;
 
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
@@ -297,181 +420,46 @@ const existingAlloc =
           image_url = await getScryfallImageLimited(it.name, ctx);
         }
 
-        if (!Number.isFinite(ctId) || requestedQty <= 0) {
-          return {
-            ...it,
-            blueprintId: resolvedBlueprintId,
-            image_url,
-            binLocations: [],
-            picked: false,
-            pickedAt: null,
-            pickedBy: null,
-          };
+        const binLocations = allocationToBinLocations(existingAlloc);
+
+        if (!existingAlloc) {
+          console.warn("⚠️ NO SAVED ALLOCATION FOR ORDER LINE", {
+            orderId: orderIdStr,
+            orderCode: order.code || null,
+            orderItemId: it.orderItemId ?? it.id,
+            name: it.name,
+            cardTraderId: Number.isFinite(ctId) ? ctId : it.cardTraderId,
+            condition: it.condition,
+            isFoil: it.isFoil,
+            blueprintId: it.blueprintId,
+          });
+        } else if (!binLocations.length) {
+          console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS", {
+            orderId: orderIdStr,
+            orderCode: order.code || null,
+            orderItemId: it.orderItemId ?? it.id,
+            cardTraderId: existingAlloc.cardTraderId,
+            name: existingAlloc.name || it.name,
+            status: existingAlloc.status,
+          });
         }
 
-// Already allocated: return stored allocation snapshot.
-if (existingAlloc && Array.isArray(existingAlloc.pickedLocations) && existingAlloc.pickedLocations.length > 0) {
-  const binLocations = existingAlloc.pickedLocations.map((pl) => ({
-    bin:
-      (pl.bin && (pl.bin.label || pl.bin.name)) ||
-      (typeof pl.bin === "string" ? pl.bin : String(pl.bin || "?")),
-    row: pl.row,
-    quantity: pl.quantity,
-  }));
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations,
-    name: existingAlloc.name || it.name,
-    condition: existingAlloc.condition ?? it.condition ?? null,
-    isFoil: it.isFoil === true ? true : existingAlloc.isFoil ?? false,
-    picked: !!existingAlloc.picked,
-    pickedAt: existingAlloc.pickedAt || null,
-    pickedBy: existingAlloc.pickedBy || null,
-  };
-}
-
-if (existingAlloc) {
-  console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS", {
-    orderId: orderIdStr,
-    orderCode: order.code || null,
-    cardTraderId: ctId,
-    name: it.name,
-  });
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations: [],
-    name: existingAlloc.name || it.name,
-    condition: existingAlloc.condition ?? it.condition ?? null,
-    isFoil: it.isFoil === true ? true : existingAlloc.isFoil ?? false,
-    picked: !!existingAlloc.picked,
-    pickedAt: existingAlloc.pickedAt || null,
-    pickedBy: existingAlloc.pickedBy || null,
-  };
-}
-const hasUsableStock = (item) =>
-  item &&
-  Array.isArray(item.locations) &&
-  item.locations.reduce((sum, loc) => sum + Number(loc.quantity || 0), 0) > 0;
-
-if (!hasUsableStock(invItem)) {
- const normalizeCondition = (condition = "") => {
-  const c = String(condition).trim().toLowerCase();
-
-  if (c === "near mint" || c === "nm") return "NM";
-  if (c === "lightly played" || c === "slightly played" || c === "lp" || c === "sp") return "LP";
-  if (c === "moderately played" || c === "mp") return "MP";
-  if (c === "heavily played" || c === "hp") return "HP";
-  if (c === "damaged" || c === "poor" || c === "dm" || c === "dmg") return "DMG";
-
-  return String(condition || "").trim();
-};
-
-const normalizedCondition = normalizeCondition(it.condition);
-
-const conditionOptions =
-  normalizedCondition === "NM"
-    ? ["NM", "Near Mint", "near mint", "nm"]
-    : normalizedCondition === "LP"
-    ? ["LP", "Lightly Played", "lightly played", "Slightly Played", "slightly played", "SP", "sp"]
-    : normalizedCondition === "MP"
-    ? ["MP", "Moderately Played", "moderately played"]
-    : normalizedCondition === "HP"
-    ? ["HP", "Heavily Played", "heavily played"]
-    : normalizedCondition === "DMG"
-    ? ["DMG", "Damaged", "damaged", "Poor", "poor"]
-    : [normalizedCondition];
-
-const escapedName = String(it.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const fallbackQuery = {
-  name: new RegExp(`^${escapedName}$`, "i"),
-  condition: { $in: conditionOptions },
-  isFoil: it.isFoil === true,
-  blueprintId: it.blueprintId,
-  locations: { $exists: true, $ne: [] },
-};
-
-if (!it.blueprintId) {
-  console.warn("⚠️ SKIPPING FALLBACK MATCH WITHOUT BLUEPRINT ID", {
-    orderId: orderIdStr,
-    orderCode: order.code || null,
-    name: it.name,
-    cardTraderId: ctId,
-    setName: it.set_name,
-  });
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations: [],
-    picked: false,
-    pickedAt: null,
-    pickedBy: null,
-  };
-}
-  const fallbackItem = await InventoryItem.findOne(fallbackQuery)
-    .populate("locations.bin", "name label rows description")
-    .exec();
-
-  if (hasUsableStock(fallbackItem)) {
-    console.warn("⚠️ USING FALLBACK INVENTORY MATCH", {
-      orderId: orderIdStr,
-      orderCode: order.code || null,
-      soldCardTraderId: ctId,
-      fallbackCardTraderId: fallbackItem.cardTraderId,
-      name: it.name,
-      condition: it.condition,
-      isFoil: it.isFoil,
-      setCode: fallbackItem.setCode,
-    });
-
-    invItem = fallbackItem;
-  }
-}
-
-
-// Display route only: do NOT allocate or deduct inventory here.
-// Allocation should be handled by the server sync/reconcile job only.
-if (!existingAlloc) {
-  console.warn("⚠️ NO SAVED ALLOCATION FOR ORDER LINE", {
-    orderId: orderIdStr,
-    orderCode: order.code || null,
-    orderItemId: it.id,
-    name: it.name,
-    cardTraderId: ctId,
-    requestedQty,
-    condition: it.condition,
-    isFoil: it.isFoil,
-    blueprintId: it.blueprintId,
-  });
-
-  return {
-    ...it,
-    blueprintId: resolvedBlueprintId,
-    image_url,
-    binLocations: [],
-    picked: false,
-    pickedAt: null,
-    pickedBy: null,
-  };
-}
-
-return {
-  ...it,
-  blueprintId: resolvedBlueprintId,
-  image_url,
-  binLocations: [],
-  picked: false,
-  pickedAt: null,
-  pickedBy: null,
-};
+        return {
+          ...it,
+          id: it.orderItemId ?? it.id,
+          cardTraderId: Number.isFinite(ctId)
+            ? ctId
+            : existingAlloc?.cardTraderId ?? null,
+          blueprintId: resolvedBlueprintId,
+          image_url,
+          binLocations,
+          name: existingAlloc?.name || it.name,
+          condition: existingAlloc?.condition ?? it.condition ?? null,
+          isFoil: it.isFoil === true ? true : existingAlloc?.isFoil ?? false,
+          picked: !!existingAlloc?.picked,
+          pickedAt: existingAlloc?.pickedAt || null,
+          pickedBy: existingAlloc?.pickedBy || null,
+        };
       })
     );
 
@@ -487,12 +475,12 @@ return {
     console.error("   ↳ Data:", data || err.message || err);
 
     return res.status(500).json({
-  error: "Failed to fetch order items",
-  status,
-  message: err?.message || String(err),
-  stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined,
-  ctError: data || null,
-});
+      error: "Failed to fetch order items",
+      status,
+      message: err?.message || String(err),
+      stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined,
+      ctError: data || null,
+    });
   }
 });
 

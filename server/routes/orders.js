@@ -32,6 +32,47 @@ function getRawItems(o) {
   return [];
 }
 
+function getTorontoStartOfToday() {
+  const torontoNow = new Date(
+    new Date().toLocaleString("en-CA", {
+      timeZone: "America/Toronto",
+    })
+  );
+
+  torontoNow.setHours(0, 0, 0, 0);
+  return torontoNow;
+}
+
+function getOrderSyncCutoff(rawOverride) {
+  const raw = rawOverride || process.env.ORDER_SYNC_CUTOFF;
+
+  if (raw) {
+    const cutoff = new Date(raw);
+
+    if (Number.isNaN(cutoff.getTime())) {
+      return {
+        ok: false,
+        cutoff: null,
+        raw,
+      };
+    }
+
+    return {
+      ok: true,
+      cutoff,
+      source: rawOverride ? "request" : "ORDER_SYNC_CUTOFF",
+      raw,
+    };
+  }
+
+  return {
+    ok: true,
+    cutoff: getTorontoStartOfToday(),
+    source: "today_toronto_default",
+    raw: null,
+  };
+}
+
 async function fetchAllSellerOrders() {
   const client = ct();
   let page = 1;
@@ -162,10 +203,12 @@ router.get("/", async (req, res) => {
  * - No allocation deletion here.
  * - No stale cleanup here.
  * - Only reconciles eligible active orders.
- * - Optional cutoff prevents old orders from touching rebuilt inventory.
+ * - ORDER_SYNC_CUTOFF prevents old orders from touching rebuilt inventory.
  *
  * Set in .env after a wipe/reset:
  * ORDER_SYNC_CUTOFF=2026-05-02T00:00:00.000Z
+ *
+ * If ORDER_SYNC_CUTOFF is missing, the safe default is today at midnight Toronto.
  */
 router.post("/sync", async (req, res) => {
   try {
@@ -179,41 +222,46 @@ router.post("/sync", async (req, res) => {
 
     console.log("DEBUG /api/orders/sync states:", stateCounts);
 
-    // Auto-cutoff: ONLY process orders created TODAY (Toronto time)
-const now = new Date();
+    const cutoffInfo = getOrderSyncCutoff(req.body?.cutoff || req.query?.cutoff);
 
-const cutoff = new Date(
-  new Date().toLocaleString("en-CA", {
-    timeZone: "America/Toronto",
-  })
-);
-
-cutoff.setHours(0, 0, 0, 0);
-
-    if (cutoff && Number.isNaN(cutoff.getTime())) {
+    if (!cutoffInfo.ok) {
       return res.status(400).json({
         ok: false,
         error: "Invalid ORDER_SYNC_CUTOFF env value",
-        value: process.env.ORDER_SYNC_CUTOFF,
+        value: cutoffInfo.raw,
       });
     }
+
+    const cutoff = cutoffInfo.cutoff;
+    let skippedBeforeCutoff = 0;
+    let skippedMissingCreatedAt = 0;
+    let skippedIneligibleState = 0;
 
     const eligible = allOrders.filter((o) => {
       const state = String(o.state || o.status || "").toLowerCase();
       const isZero = !!o.via_cardtrader_zero;
 
-      if (isZero && state !== "hub_pending") return false;
-      if (!isZero && state !== "paid") return false;
+      if (isZero && state !== "hub_pending") {
+        skippedIneligibleState++;
+        return false;
+      }
+
+      if (!isZero && state !== "paid") {
+        skippedIneligibleState++;
+        return false;
+      }
 
       if (cutoff) {
         const rawCreated = getOrderCreatedAt(o);
         const createdAt = rawCreated ? new Date(rawCreated) : null;
 
         if (!createdAt || Number.isNaN(createdAt.getTime())) {
+          skippedMissingCreatedAt++;
           return false;
         }
 
         if (createdAt < cutoff) {
+          skippedBeforeCutoff++;
           return false;
         }
       }
@@ -284,6 +332,10 @@ cutoff.setHours(0, 0, 0, 0);
       reconciled,
       failed,
       cutoff: cutoff ? cutoff.toISOString() : null,
+      cutoffSource: cutoffInfo.source,
+      skippedBeforeCutoff,
+      skippedMissingCreatedAt,
+      skippedIneligibleState,
       deletedAllocationsCount: 0,
       deletedStaleAllocationsCount: 0,
       results,

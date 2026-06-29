@@ -70,16 +70,22 @@ function getLineStableIds(line, index) {
     line?.seller_order_item_id ??
     null;
 
-  const marketplaceOrderItemId =
-    raw == null ? `line-${index + 1}` : String(raw);
+  // ManaPool can return 0 / "0" as a useless repeated line id.
+  // Treat that as not stable and fall back to line-1, line-2, etc.
+  const rawStr = raw == null ? "" : String(raw).trim();
+  const hasStableRaw = rawStr !== "" && rawStr !== "0";
 
-  const numericOrderItemId = Number.isFinite(Number(raw))
-    ? Number(raw)
-    : index + 1;
+  const marketplaceOrderItemId = hasStableRaw
+    ? rawStr
+    : `line-${index + 1}`;
+
+  // Always use the visible line position for Mongo's numeric orderItemId.
+  // This prevents one bad orderItemId: 0 record from matching every line.
+  const orderItemId = index + 1;
 
   return {
     marketplaceOrderItemId,
-    orderItemId: numericOrderItemId,
+    orderItemId,
   };
 }
 
@@ -333,12 +339,15 @@ export async function reconcileManaPoolOrder(order, options = {}) {
     const manaPoolInventoryIdForExisting = getLineManaPoolInventoryId(line);
 
 const existingOr = [
-  { orderItemId },
-  { marketplaceOrderItemId },
+  { marketplaceOrderItemId: String(marketplaceOrderItemId) },
 ];
 
+// Only match by ManaPool inventory id if it exists.
+// Do NOT match by orderItemId here, because the old broken allocation used orderItemId: 0.
 if (manaPoolInventoryIdForExisting) {
-  existingOr.push({ manapoolInventoryId: manaPoolInventoryIdForExisting });
+  existingOr.push({
+    manapoolInventoryId: String(manaPoolInventoryIdForExisting),
+  });
 }
 
 const existing = await OrderAllocation.findOne({

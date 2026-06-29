@@ -5,13 +5,14 @@ const router = express.Router();
 
 /**
  * GET /api/orders-weekly
- * Groups CardTrader Zero HUB_PENDING seller orders by completed week.
  *
- * Important:
- * - Keeps the old grouped shipment style.
- * - Hides the current active/open week.
- * - Card/bin details still come from /api/order-articles/:id,
- *   which reads OrderAllocation.pickedLocations.
+ * CardTrader Zero Weekly Grouped view.
+ *
+ * IMPORTANT:
+ * - This is DISPLAY ONLY.
+ * - It should show the consolidated CardTrader Zero shipment orders.
+ * - It should NOT show the active hub_pending orders from Daily Sales.
+ * - Inventory deduction happens earlier from hub_pending orders only.
  */
 router.get("/", async (req, res) => {
   try {
@@ -39,66 +40,57 @@ router.get("/", async (req, res) => {
       return res.json([]);
     }
 
-    const eligibleOrders = orders.filter((o) => {
+    const shipmentStates = new Set(["paid", "sent", "done"]);
+
+    const shipmentOrders = orders.filter((o) => {
       const state = String(o.state || "").toLowerCase();
-      return state === "hub_pending";
+      return o.viaCardTraderZero === true && shipmentStates.has(state);
     });
 
-    // Monday-based week start, matching your current UI labels.
-    const getWeekId = (createdAt) => {
-      if (!createdAt) return "unknown";
+    const groups = {};
 
-      const d = new Date(createdAt);
-      if (isNaN(d.getTime())) return "unknown";
+    for (const o of shipmentOrders) {
+      const paidAt = o.paid_at || o.paidAt || o.createdAt || null;
+      const rawDate =
+        paidAt ||
+        (o.code && String(o.code).length >= 8
+          ? `${String(o.code).slice(0, 4)}-${String(o.code).slice(
+              4,
+              6
+            )}-${String(o.code).slice(6, 8)}T00:00:00.000Z`
+          : null);
 
-      const day = d.getDay(); // Sun=0, Mon=1...
-      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const d = rawDate ? new Date(rawDate) : null;
+      const groupDate =
+        d && !Number.isNaN(d.getTime())
+          ? d.toISOString().substring(0, 10)
+          : "unknown";
 
-      const monday = new Date(d);
-      monday.setDate(diff);
-      monday.setHours(0, 0, 0, 0);
-
-      return monday.toISOString().substring(0, 10);
-    };
-
-    const currentWeekId = getWeekId(new Date().toISOString());
-
-    const weeks = {};
-
-    for (const o of eligibleOrders) {
-      const weekId = getWeekId(o.createdAt);
-
-      // Hide the current active/open week.
-      // This prevents cards from the next still-building shipment
-      // from appearing in the weekly shipping group.
-      if (weekId === currentWeekId) {
-        continue;
-      }
-
-      if (!weeks[weekId]) {
-        weeks[weekId] = {
-          weekStart: weekId,
+      if (!groups[groupDate]) {
+        groups[groupDate] = {
+          weekStart: groupDate,
+          shipmentDate: groupDate,
           totalOrders: 0,
           totalValueCents: 0,
           orders: [],
         };
       }
 
-      weeks[weekId].totalOrders += 1;
-      weeks[weekId].totalValueCents += o.sellerTotalCents ?? 0;
-      weeks[weekId].orders.push(o);
+      groups[groupDate].totalOrders += 1;
+      groups[groupDate].totalValueCents += Number(o.sellerTotalCents || 0);
+      groups[groupDate].orders.push(o);
     }
 
-    const output = Object.values(weeks).sort(
-      (a, b) => new Date(b.weekStart) - new Date(a.weekStart)
+    const output = Object.values(groups).sort(
+      (a, b) => new Date(b.shipmentDate) - new Date(a.shipmentDate)
     );
 
-    output.forEach((w) => {
-      w.totalValue = (w.totalValueCents / 100).toFixed(2);
+    output.forEach((group) => {
+      group.totalValue = (group.totalValueCents / 100).toFixed(2);
     });
 
     console.log(
-      `[/api/orders-weekly] computed ${output.length} completed weeks from ${eligibleOrders.length} eligible orders (raw orders: ${orders.length}, hidden current week: ${currentWeekId})`
+      `[/api/orders-weekly] computed ${output.length} CT Zero shipment groups from ${shipmentOrders.length} consolidated shipment orders (raw orders: ${orders.length})`
     );
 
     return res.json(output);

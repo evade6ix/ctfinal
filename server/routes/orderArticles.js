@@ -126,6 +126,24 @@ function extractCardTraderId(a) {
   );
 }
 
+function extractHubPendingOrderId(a) {
+  const raw =
+    a?.hub_pending_order_id ??
+    a?.hubPendingOrderId ??
+    a?.hub_pending_order?.id ??
+    null;
+
+  return raw == null ? null : String(raw);
+}
+
+function extractHubPendingOrderItemId(a) {
+  return getFirstFiniteNumber(
+    a?.hub_pending_order_item_id,
+    a?.hubPendingOrderItemId,
+    a?.hub_pending_order_item?.id
+  );
+}
+
 function extractBlueprintId(a) {
   return getFirstFiniteNumber(
     a?.blueprint_id,
@@ -180,16 +198,6 @@ function allocationSourceFilter() {
   return {
     $or: [{ source: "cardtrader" }, { source: { $exists: false } }],
   };
-}
-
-function allocationOrderFilter({ orderId, orderCode }) {
-  if (orderCode) {
-    return {
-      $or: [{ orderId }, { orderCode }],
-    };
-  }
-
-  return { orderId };
 }
 
 function getAllocationBinLabel(bin) {
@@ -263,6 +271,7 @@ router.get("/image", async (req, res) => {
 
 /**
  * GET /api/order-articles/:id
+ *
  * Returns normalized line items for an order, including:
  * - cardTraderId / blueprintId
  * - quantity
@@ -271,7 +280,15 @@ router.get("/image", async (req, res) => {
  * - picked / pickedAt / pickedBy from saved OrderAllocation
  * - isFoil / condition
  *
- * Display route only: this must never allocate or deduct inventory.
+ * DISPLAY ROUTE ONLY.
+ *
+ * This must never allocate or deduct inventory.
+ *
+ * CT Zero behavior:
+ * - Daily Sales allocates/deducts from the original hub_pending orders.
+ * - Weekly Grouped opens the later consolidated paid/sent/done CT Zero order.
+ * - Consolidated CT Zero items contain hub_pending_order_id.
+ * - We use hub_pending_order_id + product_id/cardTraderId to find the original allocation.
  */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -287,7 +304,7 @@ router.get("/:id", async (req, res) => {
     const orderRes = await client.get(`/orders/${id}`);
     const order = orderRes.data || {};
 
-    // 2️⃣ Extract line items (be generous about the shape)
+    // 2️⃣ Extract line items generously
     let rawItems = [];
     if (Array.isArray(order.order_items)) {
       rawItems = order.order_items;
@@ -310,6 +327,8 @@ router.get("/:id", async (req, res) => {
         id: orderItemId ?? a?.id ?? `line-${index + 1}`,
         orderItemId,
         cardTraderId,
+        hubPendingOrderId: extractHubPendingOrderId(a),
+        hubPendingOrderItemId: extractHubPendingOrderItemId(a),
         blueprintId: extractBlueprintId(a),
         name: a?.name || a?.product?.name || "Unknown item",
         quantity: Number(a?.quantity ?? a?.qty ?? 0) || 0,
@@ -321,14 +340,40 @@ router.get("/:id", async (req, res) => {
       };
     });
 
-    // 4️⃣ Load saved allocations by exact order/order code FIRST.
-    // Do not require cardTraderId here: Daily Sales should still show saved bins
-    // when CardTrader's live order payload omits or reshapes product_id.
+    if (!baseItems.length && !debug) {
+      return res.json([]);
+    }
+
+    // 4️⃣ Load saved allocations.
+    //
+    // Normal order / Daily Sales:
+    //   Lookup by current orderId/orderCode.
+    //
+    // CT Zero consolidated shipment:
+    //   The consolidated paid/sent/done order item points back to the original
+    //   hub_pending order with hub_pending_order_id.
+    //   We include those original hub_pending order IDs in the allocation query.
+    const hubPendingOrderIds = [
+      ...new Set(
+        baseItems
+          .map((it) => it.hubPendingOrderId)
+          .filter(Boolean)
+          .map(String)
+      ),
+    ];
+
+    const orderLookupOr = [{ orderId: orderIdStr }];
+
+    if (orderCodeStr) {
+      orderLookupOr.push({ orderCode: orderCodeStr });
+    }
+
+    if (hubPendingOrderIds.length > 0) {
+      orderLookupOr.push({ orderId: { $in: hubPendingOrderIds } });
+    }
+
     const existingAllocations = await OrderAllocation.find({
-      $and: [
-        allocationOrderFilter({ orderId: orderIdStr, orderCode: orderCodeStr }),
-        allocationSourceFilter(),
-      ],
+      $and: [{ $or: orderLookupOr }, allocationSourceFilter()],
     })
       .populate("pickedLocations.bin", "name label rows description")
       .exec();
@@ -338,6 +383,12 @@ router.get("/:id", async (req, res) => {
         order,
         rawItems,
         baseItems,
+        lookup: {
+          orderId: orderIdStr,
+          orderCode: orderCodeStr,
+          hubPendingOrderIds,
+          orderLookupOr,
+        },
         existingAllocationCount: existingAllocations.length,
         existingAllocations: existingAllocations.map((a) => ({
           _id: a._id?.toString?.(),
@@ -353,21 +404,39 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    if (!baseItems.length) return res.json([]);
-
     const allocationByLine = new Map();
     const allocationByCardTraderId = new Map();
     const allocationByLegacy = new Map();
+    const allocationByHubPendingLine = new Map();
+    const allocationByHubPendingCardTraderId = new Map();
 
     for (const alloc of existingAllocations) {
+      const allocOrderId = alloc.orderId != null ? String(alloc.orderId) : null;
+
       if (alloc.orderItemId != null) {
         allocationByLine.set(Number(alloc.orderItemId), alloc);
+
+        if (allocOrderId) {
+          allocationByHubPendingLine.set(
+            `${allocOrderId}:${Number(alloc.orderItemId)}`,
+            alloc
+          );
+        }
       }
 
       if (alloc.cardTraderId != null) {
         const ctId = Number(alloc.cardTraderId);
+
         if (!allocationByCardTraderId.has(ctId)) {
           allocationByCardTraderId.set(ctId, alloc);
+        }
+
+        if (allocOrderId) {
+          const hubCardKey = `${allocOrderId}:${ctId}`;
+
+          if (!allocationByHubPendingCardTraderId.has(hubCardKey)) {
+            allocationByHubPendingCardTraderId.set(hubCardKey, alloc);
+          }
         }
 
         allocationByLegacy.set(legacyAllocationKey(ctId, alloc.name), alloc);
@@ -400,7 +469,30 @@ router.get("/:id", async (req, res) => {
         const ctId = Number(it.cardTraderId);
         const invItem = Number.isFinite(ctId) ? inventoryMap.get(ctId) : null;
 
-        const existingAlloc =
+        const hubPendingOrderId = it.hubPendingOrderId
+          ? String(it.hubPendingOrderId)
+          : null;
+
+        const hubPendingOrderItemId =
+          it.hubPendingOrderItemId != null
+            ? Number(it.hubPendingOrderItemId)
+            : null;
+
+        const existingAllocFromHubPendingLine =
+          hubPendingOrderId && Number.isFinite(hubPendingOrderItemId)
+            ? allocationByHubPendingLine.get(
+                `${hubPendingOrderId}:${hubPendingOrderItemId}`
+              )
+            : null;
+
+        const existingAllocFromHubPendingCard =
+          hubPendingOrderId && Number.isFinite(ctId)
+            ? allocationByHubPendingCardTraderId.get(
+                `${hubPendingOrderId}:${ctId}`
+              )
+            : null;
+
+        const existingAllocFromCurrentOrder =
           (it.orderItemId != null
             ? allocationByLine.get(Number(it.orderItemId))
             : null) ||
@@ -409,6 +501,18 @@ router.get("/:id", async (req, res) => {
             ? allocationByLegacy.get(legacyAllocationKey(ctId, it.name))
             : null) ||
           null;
+
+        const isLinkedConsolidatedZeroLine =
+          hubPendingOrderId && hubPendingOrderId !== orderIdStr;
+
+        const existingAlloc = isLinkedConsolidatedZeroLine
+          ? existingAllocFromHubPendingLine ||
+            existingAllocFromHubPendingCard ||
+            null
+          : existingAllocFromHubPendingLine ||
+            existingAllocFromHubPendingCard ||
+            existingAllocFromCurrentOrder ||
+            null;
 
         const resolvedBlueprintId =
           invItem && invItem.blueprintId != null
@@ -426,6 +530,8 @@ router.get("/:id", async (req, res) => {
           console.warn("⚠️ NO SAVED ALLOCATION FOR ORDER LINE", {
             orderId: orderIdStr,
             orderCode: order.code || null,
+            hubPendingOrderId,
+            hubPendingOrderItemId,
             orderItemId: it.orderItemId ?? it.id,
             name: it.name,
             cardTraderId: Number.isFinite(ctId) ? ctId : it.cardTraderId,
@@ -437,6 +543,8 @@ router.get("/:id", async (req, res) => {
           console.warn("⚠️ EXISTING ALLOCATION HAS NO BINS", {
             orderId: orderIdStr,
             orderCode: order.code || null,
+            hubPendingOrderId,
+            hubPendingOrderItemId,
             orderItemId: it.orderItemId ?? it.id,
             cardTraderId: existingAlloc.cardTraderId,
             name: existingAlloc.name || it.name,
@@ -447,6 +555,8 @@ router.get("/:id", async (req, res) => {
         return {
           ...it,
           id: it.orderItemId ?? it.id,
+          hubPendingOrderId: it.hubPendingOrderId || null,
+          hubPendingOrderItemId: it.hubPendingOrderItemId || null,
           cardTraderId: Number.isFinite(ctId)
             ? ctId
             : existingAlloc?.cardTraderId ?? null,

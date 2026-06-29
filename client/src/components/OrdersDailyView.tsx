@@ -24,38 +24,30 @@ type OrderSummary = {
   orderAs?: string | null;
   createdAt?: string | null;
   formattedTotal?: string | null;
-
   sellerTotalCents?: number | null;
   sellerTotalCurrency?: string | null;
+  viaCardTraderZero?: boolean;
+  via_cardtrader_zero?: boolean;
 };
 
 type OrderItem = {
   id?: number;
+  orderItemId?: number;
   cardTraderId?: number;
   blueprintId?: number;
   name?: string;
   quantity?: number;
-  set_name?: string; // e.g. "Ikoria: Lair of Behemoths"
-  setCode?: string; // if you ever add this later
+  set_name?: string;
+  setCode?: string;
   binLocations?: { bin: string; row: number; quantity: number }[];
   image_url?: string;
 
-  // 👇 pulled through from OrderAllocation in /api/order-articles
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
 
-  // 👇 NEW
   isFoil?: boolean;
   condition?: string | null;
-};
-
-type DailySummary = {
-  date: string; // "YYYY-MM-DD"
-  totalOrders: number;
-  totalValueCents: number;
-  totalValue: string;
-  orders: OrderSummary[];
 };
 
 type DailyAllocationRef = {
@@ -66,7 +58,6 @@ type DailyAllocationRef = {
 };
 
 type DailyLine = {
-  date: string;
   name: string;
   set_name?: string;
   setCode?: string;
@@ -75,93 +66,85 @@ type DailyLine = {
   quantity: number;
   image_url?: string;
 
-  // 👇 NEW
   isFoil?: boolean;
   condition?: string | null;
 
-  // 👇 which allocations this line represents
   allocations: DailyAllocationRef[];
   totalAllocations: number;
   pickedAllocations: number;
 
-  // stable key for this bin/row/set/card group
   groupKey: string;
 };
 
 const API_BASE = "/api";
-const PER_PAGE = 10;
+const PER_PAGE = 50;
 
-// 👉 Helper: get YYYY-MM-DD in America/Toronto
-function getTorontoDateKey(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-CA", {
-    timeZone: "America/Toronto",
-  }); // "YYYY-MM-DD"
-}
-
-// 👉 Sorting helper: Bin → Row → Set → Card name
 function sortDailyLines(lines: DailyLine[]): DailyLine[] {
   return [...lines].sort((a, b) => {
-    // 1) Bin (string, numeric-aware)
     const aBin = (a.bin || "").toString();
     const bBin = (b.bin || "").toString();
+
     if (aBin !== bBin) {
       return aBin.localeCompare(bBin, undefined, { numeric: true });
     }
 
-    // 2) Row (ascending; unassigned rows at bottom)
     const aRow = a.row ?? Number.MAX_SAFE_INTEGER;
     const bRow = b.row ?? Number.MAX_SAFE_INTEGER;
+
     if (aRow !== bRow) {
       return aRow - bRow;
     }
 
-    // 3) Set (prefer setCode, fallback to set_name)
     const aSet = (a.setCode || a.set_name || "").toString().toLowerCase();
     const bSet = (b.setCode || b.set_name || "").toString().toLowerCase();
+
     if (aSet !== bSet) {
       return aSet.localeCompare(bSet, undefined, { numeric: true });
     }
 
-    // 4) Card name A–Z
     const aName = (a.name || "").toString().toLowerCase();
     const bName = (b.name || "").toString().toLowerCase();
+
     return aName.localeCompare(bName, undefined, { numeric: true });
   });
 }
 
+function getOrderValueCents(order: OrderSummary): number {
+  if (typeof order.sellerTotalCents === "number") {
+    return order.sellerTotalCents;
+  }
+
+  if (order.formattedTotal) {
+    const cleaned = order.formattedTotal.replace(/[^\d.,-]/g, "");
+    const normalized = cleaned.replace(",", ".");
+    const num = parseFloat(normalized);
+
+    if (!Number.isNaN(num)) {
+      return Math.round(num * 100);
+    }
+  }
+
+  return 0;
+}
+
 export function OrdersDailyView() {
-  const [orders, setOrders] = useState<OrderSummary[]>([]);
+  const [activeOrders, setActiveOrders] = useState<OrderSummary[]>([]);
+  const [lines, setLines] = useState<DailyLine[]>([]);
+
   const [loading, setLoading] = useState(false);
   const [linesLoading, setLinesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // date -> header stats (orders + total value)
-  const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
-  // date -> aggregated picking lines for that date
-  const [dailyLinesByDate, setDailyLinesByDate] = useState<
-    Record<string, DailyLine[]>
-  >({});
+  const [page, setPage] = useState(1);
+  const [cardSearch, setCardSearch] = useState("");
 
-  // date -> current page (for per-day pagination)
-  const [pageByDate, setPageByDate] = useState<Record<string, number>>({});
+  const [imageOpenByKey, setImageOpenByKey] = useState<Record<string, boolean>>(
+    {}
+  );
 
-  // key (bin|row|set|name) -> whether image is open
-  const [imageOpenByKey, setImageOpenByKey] = useState<
-    Record<string, boolean>
-  >({});
-
-  // which row is currently doing a bulk pick/unpick call
+  const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
-  // which row is currently loading a Scryfall image
-  // which row is currently loading a Scryfall image
-const [imageLoadingKey, setImageLoadingKey] = useState<string | null>(null);
-
-const [cardSearch, setCardSearch] = useState("");
-
-  // 1) Fetch all orders from /api/orders (same as OrdersView)
   useEffect(() => {
     async function fetchOrders() {
       try {
@@ -169,12 +152,24 @@ const [cardSearch, setCardSearch] = useState("");
         setError(null);
 
         const res = await fetch(`${API_BASE}/orders`);
+
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
         }
 
         const data: OrderSummary[] = await res.json();
-        setOrders(data || []);
+        const allOrders = data || [];
+
+       const zeroHubPendingOrders = allOrders.filter((o) => {
+  const state = String(o.state || "").toUpperCase();
+
+  const isZero =
+    o.viaCardTraderZero === true || o.via_cardtrader_zero === true;
+
+  return state === "HUB_PENDING" && isZero;
+});
+
+        setActiveOrders(zeroHubPendingOrders);
       } catch (err: any) {
         console.error("Failed to fetch orders:", err);
         setError(err?.message ?? "Failed to fetch orders");
@@ -186,95 +181,27 @@ const [cardSearch, setCardSearch] = useState("");
     fetchOrders();
   }, []);
 
-  // 2) Build per-day header stats (order count + total C$)
   useEffect(() => {
-    // Only use Zero / hub_pending status
-    const zeroOrders = orders.filter(
-      (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
-    );
-
-    if (!zeroOrders.length) {
-      setDailySummaries([]);
-      return;
-    }
-
-    const map = new Map<
-      string,
-      { totalOrders: number; totalValueCents: number; orders: OrderSummary[] }
-    >();
-
-    for (const order of zeroOrders) {
-      const dateKey = getTorontoDateKey(order.createdAt);
-      if (!dateKey) continue;
-
-      // Try formattedTotal first, fallback to sellerTotalCents
-      let cents = 0;
-      if (order.formattedTotal) {
-        const cleaned = order.formattedTotal.replace(/[^\d.,-]/g, "");
-        const normalized = cleaned.replace(",", ".");
-        const num = parseFloat(normalized);
-        if (!Number.isNaN(num)) {
-          cents = Math.round(num * 100);
-        }
-      } else if (order.sellerTotalCents) {
-        cents = order.sellerTotalCents;
-      }
-
-      if (!map.has(dateKey)) {
-        map.set(dateKey, {
-          totalOrders: 0,
-          totalValueCents: 0,
-          orders: [],
-        });
-      }
-
-      const bucket = map.get(dateKey)!;
-      bucket.totalOrders += 1;
-      bucket.totalValueCents += cents;
-      bucket.orders.push(order);
-    }
-
-    const result: DailySummary[] = Array.from(map.entries())
-      .map(([date, bucket]) => ({
-        date,
-        totalOrders: bucket.totalOrders,
-        totalValueCents: bucket.totalValueCents,
-        totalValue: `C$${(bucket.totalValueCents / 100).toFixed(2)}`,
-        orders: bucket.orders,
-      }))
-      .sort((a, b) => (a.date < b.date ? 1 : -1)); // newest date first
-
-    setDailySummaries(result);
-  }, [orders]);
-
-  // 3) For each hub_pending order, fetch /api/order-articles/:id and aggregate per day
-  //    NOTE: we use ?skipImages=1 so this DOES NOT spam Scryfall.
-  useEffect(() => {
-    async function buildDailyLines() {
-      const zeroOrders = orders.filter(
-        (o) => o.state && o.state.toUpperCase() === "HUB_PENDING"
-      );
-
-      if (!zeroOrders.length) {
-        setDailyLinesByDate({});
+    async function buildActivePickingLines() {
+      if (!activeOrders.length) {
+        setLines([]);
         return;
       }
 
       setLinesLoading(true);
+
       try {
-        // Intermediate: date -> key -> DailyLine
-        const byDate: Record<string, Record<string, DailyLine>> = {};
+        const lineMap: Record<string, DailyLine> = {};
 
         await Promise.all(
-          zeroOrders.map(async (order) => {
-            const dateKey = getTorontoDateKey(order.createdAt);
-            if (!dateKey) return;
-
+          activeOrders.map(async (order) => {
             let items: OrderItem[] = [];
+
             try {
               const res = await fetch(
                 `${API_BASE}/order-articles/${order.id}?skipImages=1`
               );
+
               if (!res.ok) {
                 console.error(
                   "order-articles failed for",
@@ -283,6 +210,7 @@ const [cardSearch, setCardSearch] = useState("");
                 );
                 return;
               }
+
               items = await res.json();
             } catch (err) {
               console.error(
@@ -293,18 +221,12 @@ const [cardSearch, setCardSearch] = useState("");
               return;
             }
 
-            if (!byDate[dateKey]) {
-              byDate[dateKey] = {};
-            }
-            const bucket = byDate[dateKey];
-
             for (const it of items) {
               const name = it.name || "Unknown card";
               const setCode = it.setCode;
               const setName = it.set_name || "";
               const setKey = (setCode || setName || "").toString();
 
-              // Use binLocations if present; otherwise treat as unassigned
               const binLocs =
                 it.binLocations && it.binLocations.length > 0
                   ? it.binLocations
@@ -321,50 +243,60 @@ const [cardSearch, setCardSearch] = useState("");
                 const rowVal = loc.row;
 
                 const foilKey = it.isFoil ? "foil" : "nonfoil";
-const conditionKey = it.condition || "";
-const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${conditionKey}`;
+                const conditionKey = it.condition || "";
 
-                if (!bucket[key]) {
-  bucket[key] = {
-    date: dateKey,
-    name,
-    set_name: setName,
-    setCode,
-    bin: binLabel,
-    row: typeof rowVal === "number" ? rowVal : undefined,
-    quantity: 0,
-    image_url: it.image_url, // initial image (usually empty now)
+                /*
+                 * IMPORTANT:
+                 * This key defines one visible picking row.
+                 *
+                 * It is NOT just card name.
+                 * It is:
+                 * bin + row + set + card name + foil + condition
+                 *
+                 * So "Mark row picked" only marks allocations inside this exact visible row.
+                 */
+                const key = `${binLabel}|${
+                  rowVal ?? 0
+                }|${setKey}|${name}|${foilKey}|${conditionKey}`;
 
-    // 👇 NEW
-    isFoil: it.isFoil,
-    condition: it.condition ?? null,
+                if (!lineMap[key]) {
+                  lineMap[key] = {
+                    name,
+                    set_name: setName,
+                    setCode,
+                    bin: binLabel,
+                    row: typeof rowVal === "number" ? rowVal : undefined,
+                    quantity: 0,
+                    image_url: it.image_url,
+                    isFoil: it.isFoil,
+                    condition: it.condition ?? null,
+                    allocations: [],
+                    totalAllocations: 0,
+                    pickedAllocations: 0,
+                    groupKey: key,
+                  };
+                }
 
-    allocations: [],
-    totalAllocations: 0,
-    pickedAllocations: 0,
-    groupKey: key,
-  };
-}
+                const line = lineMap[key];
 
-                const line = bucket[key];
-
-                // fill in image once we get a real one (rare with skipImages=1, but harmless)
                 if (!line.image_url && it.image_url) {
                   line.image_url = it.image_url;
                 }
 
-                // aggregate qty
                 const qtyAdd = loc.quantity ?? it.quantity ?? 0;
                 line.quantity = (line.quantity || 0) + qtyAdd;
 
-                // track allocation references (per order line)
+                const orderItemId = it.orderItemId ?? it.id;
+
                 line.allocations.push({
-  orderId: order.id,
-  orderItemId: it.id,
-  cardTraderId: it.cardTraderId,
-  picked: !!it.picked,
-});
+                  orderId: order.id,
+                  orderItemId,
+                  cardTraderId: it.cardTraderId,
+                  picked: !!it.picked,
+                });
+
                 line.totalAllocations += 1;
+
                 if (it.picked) {
                   line.pickedAllocations += 1;
                 }
@@ -373,19 +305,15 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
           })
         );
 
-        const final: Record<string, DailyLine[]> = {};
-        Object.entries(byDate).forEach(([date, map]) => {
-          final[date] = sortDailyLines(Object.values(map));
-        });
-
-        setDailyLinesByDate(final);
+        setLines(sortDailyLines(Object.values(lineMap)));
+        setPage(1);
       } finally {
         setLinesLoading(false);
       }
     }
 
-    buildDailyLines();
-  }, [orders]);
+    buildActivePickingLines();
+  }, [activeOrders]);
 
   const toggleImageForKey = (key: string) => {
     setImageOpenByKey((prev) => ({
@@ -394,7 +322,6 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
     }));
   };
 
-  // 👉 On-demand Scryfall image for a single aggregated line
   const handleShowImageForLine = async (line: DailyLine) => {
     if (!line.name) return;
 
@@ -403,10 +330,9 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
 
     try {
       const res = await fetch(
-        `${API_BASE}/order-articles/image?name=${encodeURIComponent(
-          line.name
-        )}`
+        `${API_BASE}/order-articles/image?name=${encodeURIComponent(line.name)}`
       );
+
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
         console.error(
@@ -417,27 +343,19 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
       }
 
       const json = (await res.json()) as { image_url?: string | null };
+
       if (!json.image_url) {
         console.warn("No image_url returned for", line.name);
         return;
       }
 
-      // Update just that one line in dailyLinesByDate
-      setDailyLinesByDate((prev) => {
-        const dayLines = prev[line.date];
-        if (!dayLines) return prev;
-
-        const updatedDayLines = dayLines.map((l) =>
+      setLines((prev) =>
+        prev.map((l) =>
           l.groupKey === rowKey
             ? { ...l, image_url: json.image_url || l.image_url }
             : l
-        );
-
-        return {
-          ...prev,
-          [line.date]: updatedDayLines,
-        };
-      });
+        )
+      );
     } catch (err) {
       console.error("Error in handleShowImageForLine:", err);
     } finally {
@@ -445,11 +363,21 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
     }
   };
 
-  // bulk pick/unpick for a single aggregated line (no re-aggregation)
+  /*
+   * Pick/unpick for ONE VISIBLE ROW.
+   *
+   * This does not pick by card name globally.
+   * It only loops through the allocations attached to this exact row key:
+   * bin + row + set + card + foil + condition.
+   *
+   * Backend saves picked status on OrderAllocation.
+   * Zero Weekly Shipments can later read the same OrderAllocation.
+   */
   const handleTogglePickedLine = async (line: DailyLine) => {
     const validAllocs = line.allocations.filter(
-      (a) => typeof a.cardTraderId === "number"
+      (a) => typeof a.cardTraderId === "number" && a.orderItemId != null
     );
+
     if (!validAllocs.length) return;
 
     const allPicked =
@@ -459,6 +387,7 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
     const endpoint = allPicked ? "unpick" : "pick";
 
     setTogglingKey(line.groupKey);
+
     try {
       await Promise.all(
         validAllocs.map((alloc) =>
@@ -466,11 +395,11 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-  orderId: alloc.orderId,
-  orderItemId: alloc.orderItemId,
-  cardTraderId: alloc.cardTraderId,
-  pickedBy: allPicked ? undefined : "DailyView",
-}),
+              orderId: alloc.orderId,
+              orderItemId: alloc.orderItemId,
+              cardTraderId: alloc.cardTraderId,
+              pickedBy: allPicked ? undefined : "DailyView",
+            }),
           }).then(async (res) => {
             if (!res.ok) {
               const txt = await res.text().catch(() => "");
@@ -485,12 +414,8 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
         )
       );
 
-      // 🎯 NO FULL REBUILD: just update this line locally
-      setDailyLinesByDate((prev) => {
-        const dayLines = prev[line.date];
-        if (!dayLines) return prev;
-
-        const updatedDayLines = dayLines.map((l) => {
+      setLines((prev) =>
+        prev.map((l) => {
           if (l.groupKey !== line.groupKey) return l;
 
           const newPickedCount = allPicked ? 0 : l.totalAllocations;
@@ -500,50 +425,95 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
             pickedAllocations: newPickedCount,
             allocations: l.allocations.map((a) => ({
               ...a,
-              picked: !allPicked, // all picked or all unpicked
+              picked: !allPicked,
             })),
           };
-        });
-
-        return {
-          ...prev,
-          [line.date]: updatedDayLines,
-        };
-      });
+        })
+      );
     } finally {
       setTogglingKey(null);
     }
   };
 
+  const searchTerm = cardSearch.trim().toLowerCase();
+
+  const filteredLines = searchTerm
+    ? lines.filter((line) => {
+        const haystack = [
+          line.name,
+          line.set_name,
+          line.setCode,
+          line.bin,
+          line.condition,
+          line.isFoil ? "foil" : "non-foil",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return haystack.includes(searchTerm);
+      })
+    : lines;
+
+  const totalPages = Math.max(1, Math.ceil(filteredLines.length / PER_PAGE));
+  const safePage = page > totalPages ? 1 : page;
+  const startIndex = (safePage - 1) * PER_PAGE;
+  const pageLines = filteredLines.slice(startIndex, startIndex + PER_PAGE);
+
+  const activeOrderCount = activeOrders.length;
+  const activeTotalCents = activeOrders.reduce(
+    (sum, order) => sum + getOrderValueCents(order),
+    0
+  );
+
+  const totalQty = lines.reduce((sum, line) => sum + (line.quantity || 0), 0);
+  const pickedRows = lines.filter(
+    (line) =>
+      line.totalAllocations > 0 &&
+      line.pickedAllocations === line.totalAllocations
+  ).length;
+
   return (
     <Box p="md">
       <Group justify="space-between" mb="md" align="flex-start">
         <div>
-          <Title order={2}>Daily Sales (Zero / HUB_PENDING)</Title>
+          <Title order={2}>Daily Sales / Zero Pick List</Title>
           <Text c="dimmed" size="sm">
-            Only CardTrader <strong>HUB_PENDING</strong> (Zero) orders,
-            grouped by Toronto calendar day, with a bin / row / set / card
-            picking list so you can pull cards every day instead of once per week.
-            Pick / unpick per line is fully persistent via OrderAllocations.
-            Images are loaded on demand per card.
+            One active picking screen for all current CardTrader{" "}
+            <strong>HUB_PENDING</strong> Zero orders. Sorted by bin and row.
+            Picked status is saved on the original allocation and can carry into
+            Zero Weekly Shipments.
           </Text>
         </div>
+
+        <Group gap="xs">
+          <Badge variant="light">Active orders: {activeOrderCount}</Badge>
+          <Badge variant="light">Lines: {lines.length}</Badge>
+          <Badge variant="light">Qty: {totalQty}</Badge>
+          <Badge variant="light">
+            Picked rows: {pickedRows} / {lines.length}
+          </Badge>
+          <Badge variant="light">
+            Total: C${(activeTotalCents / 100).toFixed(2)}
+          </Badge>
+        </Group>
       </Group>
 
       <TextInput
         mb="md"
-        placeholder="Search cards across all daily orders..."
+        placeholder="Search all active Zero orders by card, set, bin, condition, foil..."
         value={cardSearch}
         onChange={(event) => {
           setCardSearch(event.currentTarget.value);
-          setPageByDate({});
+          setPage(1);
         }}
       />
+
       {loading && (
         <Group justify="center" mt="lg">
           <Loader size="sm" />
           <Text c="dimmed" size="sm">
-            Loading daily summaries…
+            Loading active Zero orders…
           </Text>
         </Group>
       )}
@@ -559,9 +529,9 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
         </Paper>
       )}
 
-      {!loading && !error && dailySummaries.length === 0 && (
+      {!loading && !error && activeOrders.length === 0 && (
         <Text c="dimmed" mt="md">
-          No <strong>HUB_PENDING</strong> orders found.
+          No active <strong>HUB_PENDING</strong> Zero orders found.
         </Text>
       )}
 
@@ -569,219 +539,173 @@ const key = `${binLabel}|${rowVal ?? 0}|${setKey}|${name}|${foilKey}|${condition
         <Group justify="center" mt="sm">
           <Loader size="xs" />
           <Text c="dimmed" size="xs">
-            Building daily picking lists…
+            Building active pick list…
           </Text>
         </Group>
       )}
 
-      {!loading &&
-        !error &&
-        dailySummaries.map((day) => {
-          const rawLines = dailyLinesByDate[day.date] || [];
-const searchTerm = cardSearch.trim().toLowerCase();
+      {!loading && !error && activeOrders.length > 0 && (
+        <Card withBorder radius="lg">
+          <Group justify="space-between" mb="xs">
+            <Text size="sm" c="dimmed">
+              Showing {filteredLines.length === 0 ? 0 : startIndex + 1}–
+              {Math.min(startIndex + PER_PAGE, filteredLines.length)} of{" "}
+              {filteredLines.length} visible rows
+            </Text>
 
-const lines = searchTerm
-  ? rawLines.filter((line) => {
-      const haystack = [
-        line.name,
-        line.set_name,
-        line.setCode,
-        line.bin,
-        line.condition,
-        line.isFoil ? "foil" : "non-foil",
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
+            {totalPages > 1 && (
+              <Pagination
+                size="sm"
+                value={safePage}
+                total={totalPages}
+                onChange={setPage}
+              />
+            )}
+          </Group>
 
-      return haystack.includes(searchTerm);
-    })
-  : rawLines;
+          <ScrollArea>
+            <Table striped highlightOnHover withColumnBorders>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Bin</Table.Th>
+                  <Table.Th>Row</Table.Th>
+                  <Table.Th>Set</Table.Th>
+                  <Table.Th>Card</Table.Th>
+                  <Table.Th>Foil</Table.Th>
+                  <Table.Th>Condition</Table.Th>
+                  <Table.Th>Qty</Table.Th>
+                  <Table.Th>Picked</Table.Th>
+                  <Table.Th>Image</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
 
-          const totalPages = Math.max(
-            1,
-            Math.ceil(lines.length / PER_PAGE)
-          );
-          const currentPage = pageByDate[day.date] || 1;
-          const safePage =
-  currentPage > totalPages ? 1 : currentPage;
-          const startIndex = (safePage - 1) * PER_PAGE;
-          const pageLines = lines.slice(
-            startIndex,
-            startIndex + PER_PAGE
-          );
-
-          return (
-            <Box key={day.date} mt="lg">
-              <Group justify="space-between" mb="xs">
-                <Group gap="xs">
-                  <Title order={3}>{day.date}</Title>
-                  {lines.length > 0 && (
-                    <Text size="xs" c="dimmed">
-                      Showing {startIndex + 1}–
-                      {Math.min(startIndex + PER_PAGE, lines.length)} of{" "}
-                      {lines.length} lines
-                    </Text>
-                  )}
-                </Group>
-                <Group gap="xs">
-                  <Badge variant="light">
-                    Orders: {day.totalOrders}
-                  </Badge>
-                  <Badge variant="light">
-                    Total: {day.totalValue}
-                  </Badge>
-                </Group>
-              </Group>
-
-              <Card withBorder radius="lg">
-                <ScrollArea>
-                  <Table striped highlightOnHover withColumnBorders>
-                    <Table.Thead>
-                      <Table.Tr>
-  <Table.Th>Bin</Table.Th>
-  <Table.Th>Row</Table.Th>
-  <Table.Th>Set</Table.Th>
-  <Table.Th>Card</Table.Th>
-  <Table.Th>Foil</Table.Th>
-  <Table.Th>Condition</Table.Th>
-  <Table.Th>Qty</Table.Th>
-  <Table.Th>Picked</Table.Th>
-  <Table.Th>Image</Table.Th>
-</Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {lines.length === 0 && (
-                        <Table.Tr>
-                          <Table.Td colSpan={9}>
-                            <Text c="dimmed" size="sm">
-                              No line items found for this day yet.
-                            </Text>
-                          </Table.Td>
-                        </Table.Tr>
-                      )}
-
-                      {pageLines.map((line) => {
-                        const rowKey = line.groupKey;
-                        const isOpen = !!imageOpenByKey[rowKey];
-                        const allPicked =
-                          line.totalAllocations > 0 &&
-                          line.pickedAllocations ===
-                            line.totalAllocations;
-
-                        return (
-                          <Table.Tr key={rowKey}>
-                            <Table.Td>
-                              <Text>{line.bin}</Text>
-                            </Table.Td>
-                            <Table.Td>
-                              <Text>{line.row ?? "-"}</Text>
-                            </Table.Td>
-                            <Table.Td>
-                              <Text>
-                                {line.setCode || line.set_name || "-"}
-                              </Text>
-                            </Table.Td>
-                            <Table.Td>
-  <Text>{line.name}</Text>
-</Table.Td>
-<Table.Td>
-  <Badge
-    size="sm"
-    color={line.isFoil ? "yellow" : "gray"}
-    variant={line.isFoil ? "filled" : "light"}
-  >
-    {line.isFoil ? "Foil" : "Non-Foil"}
-  </Badge>
-</Table.Td>
-<Table.Td>
-  <Text>{line.condition || "-"}</Text>
-</Table.Td>
-<Table.Td>
-  <Text>{line.quantity}</Text>
-</Table.Td>
-                            <Table.Td>
-                              <Stack gap={4}>
-                                <Text size="xs" c="dimmed">
-                                  Picked {line.pickedAllocations} /{" "}
-                                  {line.totalAllocations}
-                                </Text>
-                                <Button
-                                  size="xs"
-                                  variant={allPicked ? "outline" : "filled"}
-                                  color={allPicked ? "red" : "green"}
-                                  loading={togglingKey === rowKey}
-                                  onClick={() =>
-                                    handleTogglePickedLine(line)
-                                  }
-                                >
-                                  {allPicked
-                                    ? "Unpick all"
-                                    : "Mark all picked"}
-                                </Button>
-                              </Stack>
-                            </Table.Td>
-                            <Table.Td>
-                              <Stack gap={4}>
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  loading={imageLoadingKey === rowKey}
-                                  onClick={async () => {
-                                    if (!line.image_url) {
-                                      await handleShowImageForLine(line);
-                                    }
-                                    toggleImageForKey(rowKey);
-                                  }}
-                                >
-                                  {isOpen
-                                    ? "Hide image"
-                                    : line.image_url
-                                    ? "View image"
-                                    : "Load image"}
-                                </Button>
-                                {isOpen && (
-                                  <Box mt={4}>
-                                    <Image
-                                      src={
-                                        line.image_url ||
-                                        "/card-placeholder.png"
-                                      }
-                                      alt={line.name}
-                                      fit="contain"
-                                      radius="md"
-                                      w={220}
-                                    />
-                                  </Box>
-                                )}
-                              </Stack>
-                            </Table.Td>
-                          </Table.Tr>
-                        );
-                      })}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
-
-                {totalPages > 1 && (
-                  <Group justify="flex-end" mt="sm">
-                    <Pagination
-                      size="sm"
-                      value={safePage}
-                      total={totalPages}
-                      onChange={(page) =>
-                        setPageByDate((prev) => ({
-                          ...prev,
-                          [day.date]: page,
-                        }))
-                      }
-                    />
-                  </Group>
+              <Table.Tbody>
+                {filteredLines.length === 0 && (
+                  <Table.Tr>
+                    <Table.Td colSpan={9}>
+                      <Text c="dimmed" size="sm">
+                        No matching line items found.
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
                 )}
-              </Card>
-            </Box>
-          );
-        })}
+
+                {pageLines.map((line) => {
+                  const rowKey = line.groupKey;
+                  const isOpen = !!imageOpenByKey[rowKey];
+
+                  const allPicked =
+                    line.totalAllocations > 0 &&
+                    line.pickedAllocations === line.totalAllocations;
+
+                  return (
+                    <Table.Tr key={rowKey}>
+                      <Table.Td>
+                        <Text>{line.bin}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Text>{line.row ?? "-"}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Text>{line.setCode || line.set_name || "-"}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Text>{line.name}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Badge
+                          size="sm"
+                          color={line.isFoil ? "yellow" : "gray"}
+                          variant={line.isFoil ? "filled" : "light"}
+                        >
+                          {line.isFoil ? "Foil" : "Non-Foil"}
+                        </Badge>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Text>{line.condition || "-"}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Text>{line.quantity}</Text>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Stack gap={4}>
+                          <Text size="xs" c="dimmed">
+                            Picked {line.pickedAllocations} /{" "}
+                            {line.totalAllocations}
+                          </Text>
+
+                          <Button
+                            size="xs"
+                            variant={allPicked ? "outline" : "filled"}
+                            color={allPicked ? "red" : "green"}
+                            loading={togglingKey === rowKey}
+                            onClick={() => handleTogglePickedLine(line)}
+                          >
+                            {allPicked ? "Unpick row" : "Mark row picked"}
+                          </Button>
+                        </Stack>
+                      </Table.Td>
+
+                      <Table.Td>
+                        <Stack gap={4}>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            loading={imageLoadingKey === rowKey}
+                            onClick={async () => {
+                              if (!line.image_url) {
+                                await handleShowImageForLine(line);
+                              }
+
+                              toggleImageForKey(rowKey);
+                            }}
+                          >
+                            {isOpen
+                              ? "Hide image"
+                              : line.image_url
+                              ? "View image"
+                              : "Load image"}
+                          </Button>
+
+                          {isOpen && (
+                            <Box mt={4}>
+                              <Image
+                                src={line.image_url || "/card-placeholder.png"}
+                                alt={line.name}
+                                fit="contain"
+                                radius="md"
+                                w={220}
+                              />
+                            </Box>
+                          )}
+                        </Stack>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+
+          {totalPages > 1 && (
+            <Group justify="flex-end" mt="sm">
+              <Pagination
+                size="sm"
+                value={safePage}
+                total={totalPages}
+                onChange={setPage}
+              />
+            </Group>
+          )}
+        </Card>
+      )}
     </Box>
   );
 }

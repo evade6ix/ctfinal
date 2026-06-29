@@ -54,6 +54,7 @@ type DailyAllocationRef = {
   orderId: string | number;
   orderItemId?: number;
   cardTraderId?: number;
+  quantity?: number;
   picked?: boolean;
 };
 
@@ -289,12 +290,12 @@ export function OrdersDailyView() {
                 const orderItemId = it.orderItemId ?? it.id;
 
                 line.allocations.push({
-                  orderId: order.id,
-                  orderItemId,
-                  cardTraderId: it.cardTraderId,
-                  picked: !!it.picked,
-                });
-
+  orderId: order.id,
+  orderItemId,
+  cardTraderId: it.cardTraderId,
+  quantity: qtyAdd,
+  picked: !!it.picked,
+});
                 line.totalAllocations += 1;
 
                 if (it.picked) {
@@ -591,14 +592,19 @@ export function OrdersDailyView() {
                 )}
 
                 {pageLines.map((line) => {
-                  const rowKey = line.groupKey;
-                  const isOpen = !!imageOpenByKey[rowKey];
+  const rowKey = line.groupKey;
+  const isOpen = !!imageOpenByKey[rowKey];
 
-                  const allPicked =
-                    line.totalAllocations > 0 &&
-                    line.pickedAllocations === line.totalAllocations;
+  const allPicked =
+    line.totalAllocations > 0 &&
+    line.pickedAllocations === line.totalAllocations;
 
-                  return (
+  const pickedQty = line.allocations.reduce(
+    (sum, alloc) => sum + (alloc.picked ? alloc.quantity || 0 : 0),
+    0
+  );
+
+  return (
                     <Table.Tr key={rowKey}>
                       <Table.Td>
                         <Text>{line.bin}</Text>
@@ -637,9 +643,11 @@ export function OrdersDailyView() {
                       <Table.Td>
                         <Stack gap={4}>
                           <Text size="xs" c="dimmed">
-                            Picked {line.pickedAllocations} /{" "}
-                            {line.totalAllocations}
-                          </Text>
+  Qty picked {pickedQty} / {line.quantity}
+</Text>
+<Text size="xs" c="dimmed">
+  Order lines {line.pickedAllocations} / {line.totalAllocations}
+</Text>
 
                           <Button
                             size="xs"

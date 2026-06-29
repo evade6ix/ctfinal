@@ -341,6 +341,54 @@ export function OrdersView() {
       order?.articles ||
       [];
 
+      const rawItemsArray = Array.isArray(rawItems) ? rawItems : [];
+
+const detailedBuyerName =
+  order?.buyer?.username ||
+  order?.buyer?.name ||
+  order?.customer?.name ||
+  order?.customer_name ||
+  order?.shipping_address?.name ||
+  order?.shippingAddress?.name ||
+  "Unknown";
+
+const detailedBuyerCountry =
+  order?.buyer?.country ||
+  order?.customer?.country ||
+  order?.shipping_address?.country ||
+  order?.shippingAddress?.country ||
+  "";
+
+const detailedItemCount = rawItemsArray.reduce(
+  (sum: number, item: any) => sum + Number(item.quantity || item.qty || 1),
+  0
+);
+
+setOrders((prev) =>
+  prev.map((existingOrder) =>
+    String(existingOrder.id) === String(orderId)
+      ? {
+          ...existingOrder,
+          buyer: {
+            username: detailedBuyerName,
+            country: detailedBuyerCountry,
+          },
+          size: detailedItemCount,
+          sellerTotalCents:
+            order?.payment?.total_cents ||
+            order?.total_cents ||
+            existingOrder.sellerTotalCents ||
+            null,
+          sellerTotalCurrency:
+            order?.seller_total_currency ||
+            order?.currency ||
+            existingOrder.sellerTotalCurrency ||
+            "USD",
+        }
+      : existingOrder
+  )
+);
+
     const allocations: OrderAllocation[] = allocationRes.ok
       ? await allocationRes.json()
       : [];
@@ -369,7 +417,7 @@ export function OrdersView() {
       }
     }
 
-    const normalizedItems: OrderItem[] = rawItems.map((it: any, index: number) => {
+    const normalizedItems: OrderItem[] = rawItemsArray.map((it: any, index: number) => {
   const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
   const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
   const manapoolInventoryId = getManaPoolInventoryId(it);

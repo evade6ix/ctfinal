@@ -40,6 +40,7 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
+
 // API routes
 app.use("/api/bins", binsRouter);
 app.use("/api/inventory", inventoryRouter);

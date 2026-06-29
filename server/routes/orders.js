@@ -73,6 +73,29 @@ function getOrderSyncCutoff(rawOverride) {
   };
 }
 
+function isCardTraderOrderEligibleForInventoryDeduction(o) {
+  const state = String(o?.state || o?.status || "").toLowerCase();
+  const isZero = !!o?.via_cardtrader_zero;
+
+  if (isZero) return state === "hub_pending";
+  return state === "paid";
+}
+
+function getCardTraderEligibilityReason(o) {
+  const state = String(o?.state || o?.status || "").toLowerCase();
+  const isZero = !!o?.via_cardtrader_zero;
+
+  if (isZero && state !== "hub_pending") {
+    return "cardtrader_zero_not_hub_pending";
+  }
+
+  if (!isZero && state !== "paid") {
+    return "standard_order_not_paid";
+  }
+
+  return null;
+}
+
 async function fetchAllSellerOrders() {
   const client = ct();
   let page = 1;
@@ -99,6 +122,184 @@ async function fetchAllSellerOrders() {
   }
 
   return allOrders;
+}
+
+export async function reconcileCardTraderOrderById(orderId) {
+  const orderIdStr = String(orderId);
+  const url = `http://localhost:${
+    process.env.PORT || 3000
+  }/api/order-allocations/reconcile-order/${orderIdStr}`;
+
+  console.log(
+    `🔁 [ORDERS] Reconciling safe allocations for order ${orderIdStr} via ${url}`
+  );
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  const raw = await resp.text().catch(() => "");
+  let parsed = null;
+
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!resp.ok) {
+    return {
+      orderId: orderIdStr,
+      ok: false,
+      status: resp.status,
+      details: raw.slice(0, 300),
+    };
+  }
+
+  return {
+    orderId: orderIdStr,
+    ok: true,
+    result: parsed,
+  };
+}
+
+export async function syncEligibleCardTraderSellerOrders(options = {}) {
+  const allOrders = await fetchAllSellerOrders();
+
+  const stateCounts = {};
+  for (const o of allOrders) {
+    const s = o.state ?? o.status ?? "UNKNOWN";
+    stateCounts[s] = (stateCounts[s] || 0) + 1;
+  }
+
+  console.log("DEBUG /api/orders/sync states:", stateCounts);
+
+  const cutoffInfo = getOrderSyncCutoff(options.cutoff);
+
+  if (!cutoffInfo.ok) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Invalid ORDER_SYNC_CUTOFF env value",
+      value: cutoffInfo.raw,
+    };
+  }
+
+  const cutoff = cutoffInfo.cutoff;
+  let skippedBeforeCutoff = 0;
+  let skippedMissingCreatedAt = 0;
+  let skippedIneligibleState = 0;
+
+  const eligible = allOrders.filter((o) => {
+    if (!isCardTraderOrderEligibleForInventoryDeduction(o)) {
+      skippedIneligibleState++;
+      return false;
+    }
+
+    if (cutoff) {
+      const rawCreated = getOrderCreatedAt(o);
+      const createdAt = rawCreated ? new Date(rawCreated) : null;
+
+      if (!createdAt || Number.isNaN(createdAt.getTime())) {
+        skippedMissingCreatedAt++;
+        return false;
+      }
+
+      if (createdAt < cutoff) {
+        skippedBeforeCutoff++;
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  let reconciled = 0;
+  let failed = 0;
+  const results = [];
+
+  for (const o of eligible) {
+    const result = await reconcileCardTraderOrderById(o.id);
+
+    if (!result.ok) {
+      failed++;
+    } else {
+      reconciled++;
+    }
+
+    results.push(result);
+  }
+
+  return {
+    ok: true,
+    fetchedOrders: allOrders.length,
+    eligibleOrders: eligible.length,
+    reconciled,
+    failed,
+    cutoff: cutoff ? cutoff.toISOString() : null,
+    cutoffSource: cutoffInfo.source,
+    skippedBeforeCutoff,
+    skippedMissingCreatedAt,
+    skippedIneligibleState,
+    deletedAllocationsCount: 0,
+    deletedStaleAllocationsCount: 0,
+    results,
+  };
+}
+
+export async function syncCardTraderWebhookOrder(order) {
+  const orderId = order?.id;
+
+  if (!orderId) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "missing_order_id",
+    };
+  }
+
+  if (!isCardTraderOrderEligibleForInventoryDeduction(order)) {
+    return {
+      ok: true,
+      skipped: true,
+      orderId: String(orderId),
+      reason: getCardTraderEligibilityReason(order),
+      state: order?.state || order?.status || null,
+      viaCardTraderZero: !!order?.via_cardtrader_zero,
+    };
+  }
+
+  const cutoffInfo = getOrderSyncCutoff();
+
+  if (!cutoffInfo.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      orderId: String(orderId),
+      reason: "invalid_order_sync_cutoff",
+      value: cutoffInfo.raw,
+    };
+  }
+
+  const rawCreated = getOrderCreatedAt(order);
+  const createdAt = rawCreated ? new Date(rawCreated) : null;
+
+  if (
+    cutoffInfo.cutoff &&
+    (!createdAt || Number.isNaN(createdAt.getTime()) || createdAt < cutoffInfo.cutoff)
+  ) {
+    return {
+      ok: true,
+      skipped: true,
+      orderId: String(orderId),
+      reason: "before_cutoff_or_missing_created_at",
+      cutoff: cutoffInfo.cutoff.toISOString(),
+      createdAt: rawCreated,
+    };
+  }
+
+  return reconcileCardTraderOrderById(orderId);
 }
 
 router.get("/", async (req, res) => {
@@ -212,134 +413,13 @@ router.get("/", async (req, res) => {
  */
 router.post("/sync", async (req, res) => {
   try {
-    const allOrders = await fetchAllSellerOrders();
-
-    const stateCounts = {};
-    for (const o of allOrders) {
-      const s = o.state ?? o.status ?? "UNKNOWN";
-      stateCounts[s] = (stateCounts[s] || 0) + 1;
-    }
-
-    console.log("DEBUG /api/orders/sync states:", stateCounts);
-
-    const cutoffInfo = getOrderSyncCutoff(req.body?.cutoff || req.query?.cutoff);
-
-    if (!cutoffInfo.ok) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid ORDER_SYNC_CUTOFF env value",
-        value: cutoffInfo.raw,
-      });
-    }
-
-    const cutoff = cutoffInfo.cutoff;
-    let skippedBeforeCutoff = 0;
-    let skippedMissingCreatedAt = 0;
-    let skippedIneligibleState = 0;
-
-    const eligible = allOrders.filter((o) => {
-      const state = String(o.state || o.status || "").toLowerCase();
-      const isZero = !!o.via_cardtrader_zero;
-
-      if (isZero && state !== "hub_pending") {
-        skippedIneligibleState++;
-        return false;
-      }
-
-      if (!isZero && state !== "paid") {
-        skippedIneligibleState++;
-        return false;
-      }
-
-      if (cutoff) {
-        const rawCreated = getOrderCreatedAt(o);
-        const createdAt = rawCreated ? new Date(rawCreated) : null;
-
-        if (!createdAt || Number.isNaN(createdAt.getTime())) {
-          skippedMissingCreatedAt++;
-          return false;
-        }
-
-        if (createdAt < cutoff) {
-          skippedBeforeCutoff++;
-          return false;
-        }
-      }
-
-      return true;
+    const summary = await syncEligibleCardTraderSellerOrders({
+      cutoff: req.body?.cutoff || req.query?.cutoff,
     });
 
-    let reconciled = 0;
-    let failed = 0;
-    const results = [];
-
-    for (const o of eligible) {
-      const orderIdStr = String(o.id);
-      const url = `http://localhost:${
-        process.env.PORT || 3000
-      }/api/order-allocations/reconcile-order/${o.id}`;
-
-      console.log(
-        `🔁 [ORDERS] Reconciling safe allocations for order ${orderIdStr} via ${url}`
-      );
-
-      try {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-
-        const raw = await resp.text().catch(() => "");
-        let parsed = null;
-
-        try {
-          parsed = raw ? JSON.parse(raw) : null;
-        } catch {
-          parsed = null;
-        }
-
-        if (!resp.ok) {
-          failed++;
-          results.push({
-            orderId: orderIdStr,
-            ok: false,
-            status: resp.status,
-            details: raw.slice(0, 300),
-          });
-          continue;
-        }
-
-        reconciled++;
-        results.push({
-          orderId: orderIdStr,
-          ok: true,
-          result: parsed,
-        });
-      } catch (err) {
-        failed++;
-        results.push({
-          orderId: orderIdStr,
-          ok: false,
-          error: err?.message || String(err),
-        });
-      }
+    if (!summary.ok && summary.status === 400) {
+      return res.status(400).json(summary);
     }
-
-    const summary = {
-      ok: true,
-      fetchedOrders: allOrders.length,
-      eligibleOrders: eligible.length,
-      reconciled,
-      failed,
-      cutoff: cutoff ? cutoff.toISOString() : null,
-      cutoffSource: cutoffInfo.source,
-      skippedBeforeCutoff,
-      skippedMissingCreatedAt,
-      skippedIneligibleState,
-      deletedAllocationsCount: 0,
-      deletedStaleAllocationsCount: 0,
-      results,
-    };
 
     console.log("✅ [ORDERS] safe sync summary", summary);
     res.json(summary);

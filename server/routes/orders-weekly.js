@@ -6,13 +6,23 @@ const router = express.Router();
 /**
  * GET /api/orders-weekly
  *
- * CardTrader Zero Weekly Grouped view.
+ * CardTrader Zero Weekly Shipments
  *
- * IMPORTANT:
- * - This is DISPLAY ONLY.
- * - It should show the consolidated CardTrader Zero shipment orders.
- * - It should NOT show the active hub_pending orders from Daily Sales.
- * - Inventory deduction happens earlier from hub_pending orders only.
+ * CORRECT BEHAVIOR:
+ * - Show NOTHING before CardTrader creates the weekly consolidated shipment.
+ * - Show ONLY live consolidated CT Zero shipment orders.
+ * - That means:
+ *   viaCardTraderZero === true
+ *   state === "paid"
+ *
+ * DO NOT show:
+ * - hub_pending orders
+ * - sent orders
+ * - done orders
+ * - old historical shipments
+ *
+ * This route is DISPLAY ONLY.
+ * It must never allocate or deduct inventory.
  */
 router.get("/", async (req, res) => {
   try {
@@ -30,75 +40,50 @@ router.get("/", async (req, res) => {
 
       return res
         .status(500)
-        .json({ error: "Failed to fetch orders for weekly summary" });
+        .json({ error: "Failed to fetch CardTrader weekly shipments" });
     }
 
     const orders = await r.json();
 
     if (!Array.isArray(orders)) {
-      console.warn("⚠️ /api/orders-weekly: /api/orders did not return an array");
+      console.warn("⚠️ /api/orders-weekly: /api/orders did not return array");
       return res.json([]);
     }
 
-    const shipmentStates = new Set(["paid", "sent", "done"]);
-
-    const shipmentOrders = orders.filter((o) => {
+    const liveShipmentOrders = orders.filter((o) => {
       const state = String(o.state || "").toLowerCase();
-      return o.viaCardTraderZero === true && shipmentStates.has(state);
+
+      return o.viaCardTraderZero === true && state === "paid";
     });
 
-    const groups = {};
+    const output = liveShipmentOrders.map((o) => {
+      const paidAt = o.paid_at || o.paidAt || null;
 
-    for (const o of shipmentOrders) {
-      const paidAt = o.paid_at || o.paidAt || o.createdAt || null;
-      const rawDate =
-        paidAt ||
-        (o.code && String(o.code).length >= 8
-          ? `${String(o.code).slice(0, 4)}-${String(o.code).slice(
-              4,
-              6
-            )}-${String(o.code).slice(6, 8)}T00:00:00.000Z`
-          : null);
-
-      const d = rawDate ? new Date(rawDate) : null;
-      const groupDate =
-        d && !Number.isNaN(d.getTime())
-          ? d.toISOString().substring(0, 10)
-          : "unknown";
-
-      if (!groups[groupDate]) {
-        groups[groupDate] = {
-          weekStart: groupDate,
-          shipmentDate: groupDate,
-          totalOrders: 0,
-          totalValueCents: 0,
-          orders: [],
-        };
-      }
-
-      groups[groupDate].totalOrders += 1;
-      groups[groupDate].totalValueCents += Number(o.sellerTotalCents || 0);
-      groups[groupDate].orders.push(o);
-    }
-
-    const output = Object.values(groups).sort(
-      (a, b) => new Date(b.shipmentDate) - new Date(a.shipmentDate)
-    );
-
-    output.forEach((group) => {
-      group.totalValue = (group.totalValueCents / 100).toFixed(2);
+      return {
+        shipmentId: String(o.id),
+        weekStart: paidAt
+          ? new Date(paidAt).toISOString().substring(0, 10)
+          : "live",
+        shipmentDate: paidAt
+          ? new Date(paidAt).toISOString().substring(0, 10)
+          : "live",
+        totalOrders: 1,
+        totalValueCents: Number(o.sellerTotalCents || 0),
+        totalValue: (Number(o.sellerTotalCents || 0) / 100).toFixed(2),
+        orders: [o],
+      };
     });
 
     console.log(
-      `[/api/orders-weekly] computed ${output.length} CT Zero shipment groups from ${shipmentOrders.length} consolidated shipment orders (raw orders: ${orders.length})`
+      `[/api/orders-weekly] live CT Zero paid shipments: ${output.length} from raw orders: ${orders.length}`
     );
 
     return res.json(output);
   } catch (err) {
-    console.error("❌ weekly error:", err);
+    console.error("❌ /api/orders-weekly error:", err);
 
     return res.status(500).json({
-      error: "Failed to compute weekly shipments",
+      error: "Failed to compute CardTrader weekly shipments",
       details: err.message,
     });
   }

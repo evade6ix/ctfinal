@@ -116,26 +116,77 @@ router.get("/by-order/:orderId", async (req, res) => {
     }
 
     const docs = await OrderAllocation.find(filter)
-      .populate("pickedLocations.bin", "name label rows description")
-      .lean();
+  .populate("pickedLocations.bin", "name label rows description")
+  .populate(
+    "inventoryItemId",
+    "name setCode cardTraderId blueprintId condition isFoil imageUrl identifiers manapool"
+  )
+  .lean();
 
-    const normalizedDocs = (docs || []).map((doc) => ({
-      ...doc,
-      pickedLocations: Array.isArray(doc.pickedLocations)
-        ? doc.pickedLocations.map((pl) => ({
-            ...pl,
-            bin:
-              pl.bin && typeof pl.bin === "object"
-                ? {
-                    _id: pl.bin._id?.toString?.() || String(pl.bin._id || ""),
-                    name: pl.bin.name || null,
-                    label: pl.bin.label || pl.bin.name || null,
-                    description: pl.bin.description || null,
-                  }
-                : pl.bin || null,
-          }))
-        : [],
-    }));
+const normalizedDocs = (docs || []).map((doc) => {
+  const populatedInventoryItem =
+    doc.inventoryItemId && typeof doc.inventoryItemId === "object"
+      ? doc.inventoryItemId
+      : null;
+
+  const inventoryItemId =
+    populatedInventoryItem?._id?.toString?.() ||
+    doc.inventoryItemId?.toString?.() ||
+    doc.inventoryItemId ||
+    null;
+
+  return {
+    ...doc,
+
+    // Keep old frontend compatibility:
+    // inventoryItemId stays a string, not a populated object.
+    inventoryItemId,
+
+    // New frontend-safe inventory metadata.
+    inventoryItem: populatedInventoryItem
+      ? {
+          _id: populatedInventoryItem._id?.toString?.() || null,
+          name: populatedInventoryItem.name || null,
+          setCode: populatedInventoryItem.setCode || null,
+          cardTraderId: populatedInventoryItem.cardTraderId || null,
+          blueprintId: populatedInventoryItem.blueprintId || null,
+          condition: populatedInventoryItem.condition || null,
+          isFoil: populatedInventoryItem.isFoil === true,
+          imageUrl: populatedInventoryItem.imageUrl || null,
+          identifiers: populatedInventoryItem.identifiers || {},
+          manapool: populatedInventoryItem.manapool || {},
+        }
+      : null,
+
+    // Convenience fields for the order UI.
+    setCode: populatedInventoryItem?.setCode || null,
+    scryfallId:
+      populatedInventoryItem?.manapool?.scryfallId ||
+      populatedInventoryItem?.identifiers?.scryfallId ||
+      null,
+    tcgplayerSkuId:
+      populatedInventoryItem?.identifiers?.tcgplayerSkuId ||
+      populatedInventoryItem?.manapool?.tcgplayerSku ||
+      null,
+    manapoolCustomExternalId:
+      populatedInventoryItem?.manapool?.customExternalId || null,
+
+    pickedLocations: Array.isArray(doc.pickedLocations)
+      ? doc.pickedLocations.map((pl) => ({
+          ...pl,
+          bin:
+            pl.bin && typeof pl.bin === "object"
+              ? {
+                  _id: pl.bin._id?.toString?.() || String(pl.bin._id || ""),
+                  name: pl.bin.name || null,
+                  label: pl.bin.label || pl.bin.name || null,
+                  description: pl.bin.description || null,
+                }
+              : pl.bin || null,
+        }))
+      : [],
+  };
+});
 
     return res.json(normalizedDocs);
   } catch (err) {

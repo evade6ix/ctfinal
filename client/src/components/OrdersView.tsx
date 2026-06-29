@@ -52,9 +52,15 @@ type OrderItem = {
   quantity?: number;
   image_url?: string;
   imageUrl?: string;
-  set_name?: string;
-  binLocations?: { bin: string; row: number; quantity: number }[];
 
+  setCode?: string | null;
+  set_name?: string;
+  collectorNumber?: string | null;
+  scryfallId?: string | null;
+  tcgplayerSkuId?: string | null;
+  manapoolCustomExternalId?: string | null;
+
+  binLocations?: { bin: string; row: number; quantity: number }[];
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
@@ -73,7 +79,42 @@ type OrderAllocation = {
   marketplaceOrderItemId?: string | null;
   cardTraderId?: number | null;
   manapoolInventoryId?: string | null;
+
+  inventoryItem?: {
+    _id?: string;
+    name?: string | null;
+    setCode?: string | null;
+    cardTraderId?: number | null;
+    blueprintId?: number | null;
+    condition?: string | null;
+    isFoil?: boolean;
+    imageUrl?: string | null;
+    identifiers?: {
+      scryfallId?: string | null;
+      mtgjsonUuid?: string | null;
+      tcgplayerProductId?: string | null;
+      tcgplayerSkuId?: string | null;
+    };
+    manapool?: {
+      inventoryId?: string | null;
+      productId?: string | null;
+      productType?: string | null;
+      tcgplayerSku?: string | null;
+      scryfallId?: string | null;
+      languageId?: string | null;
+      conditionId?: string | null;
+      finishId?: string | null;
+      customExternalId?: string | null;
+    };
+  } | null;
+
+  setCode?: string | null;
+  scryfallId?: string | null;
+  tcgplayerSkuId?: string | null;
+  manapoolCustomExternalId?: string | null;
+
   requestedQuantity?: number;
+
   fulfilledQuantity?: number;
   unfilled?: number;
   name?: string;
@@ -298,19 +339,52 @@ export function OrdersView() {
     }
 
     const normalizedItems: OrderItem[] = rawItems.map((it: any, index: number) => {
-      const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
-      const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
-      const manapoolInventoryId = getManaPoolInventoryId(it);
+  const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
+  const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
+  const manapoolInventoryId = getManaPoolInventoryId(it);
 
-      const allocation =
-        allocationByOrderItemId.get(numericOrderItemId) ||
-        allocationByMarketplaceId.get(marketplaceOrderItemId) ||
-        (manapoolInventoryId
-          ? allocationByManaPoolInventoryId.get(manapoolInventoryId)
-          : null) ||
-        null;
+  const allocation =
+    allocationByOrderItemId.get(numericOrderItemId) ||
+    allocationByMarketplaceId.get(marketplaceOrderItemId) ||
+    (manapoolInventoryId
+      ? allocationByManaPoolInventoryId.get(manapoolInventoryId)
+      : null) ||
+    null;
 
-      return {
+  const manaPoolSingle = it?.product?.single || {};
+
+  const setCodeRaw =
+    allocation?.setCode ||
+    allocation?.inventoryItem?.setCode ||
+    manaPoolSingle?.set ||
+    it.setCode ||
+    it.set_code ||
+    it.expansion_code ||
+    null;
+
+  const setCode =
+    typeof setCodeRaw === "string" && setCodeRaw.trim()
+      ? setCodeRaw.trim().toUpperCase()
+      : null;
+
+  const collectorNumber =
+    manaPoolSingle?.number ||
+    it.collector_number ||
+    it.number ||
+    null;
+
+  const setDisplay = setCode
+    ? collectorNumber
+      ? `${setCode} #${collectorNumber}`
+      : setCode
+    : it.set_name ||
+      it.setName ||
+      it.expansion_name ||
+      it.product?.set_name ||
+      it.product?.expansion_name ||
+      null;
+
+  return {
         id: numericOrderItemId,
         marketplaceOrderItemId,
         source: "manapool",
@@ -340,13 +414,26 @@ export function OrdersView() {
           it.product?.imageUrl ||
           null,
 
-        set_name:
-          it.set_name ||
-          it.setName ||
-          it.expansion_name ||
-          it.product?.set_name ||
-          it.product?.expansion_name ||
-          "Unknown set",
+        setCode,
+set_name: setDisplay || "Unknown set",
+collectorNumber,
+scryfallId:
+  allocation?.scryfallId ||
+  allocation?.inventoryItem?.manapool?.scryfallId ||
+  allocation?.inventoryItem?.identifiers?.scryfallId ||
+  manaPoolSingle?.scryfall_id ||
+  null,
+tcgplayerSkuId:
+  allocation?.tcgplayerSkuId ||
+  allocation?.inventoryItem?.identifiers?.tcgplayerSkuId ||
+  allocation?.inventoryItem?.manapool?.tcgplayerSku ||
+  String(it.tcgsku || it.product?.tcgplayer_sku || "") ||
+  null,
+manapoolCustomExternalId:
+  allocation?.manapoolCustomExternalId ||
+  allocation?.inventoryItem?.manapool?.customExternalId ||
+  it.custom_external_id ||
+  null,
 
         condition:
           allocation?.condition ??
@@ -734,8 +821,8 @@ const nextPicked = !currentlyPicked;
                                       <Box style={{ flex: 1 }}>
                                         <Text fw={500}>{it.name || "No name"}</Text>
                                         <Text size="xs" c="dimmed">
-                                          {it.set_name || "Unknown set"}
-                                        </Text>
+  {it.set_name || it.setCode || "Unknown set"}
+</Text>
 
                                         <Group gap={6} mt={6}>
                                           <Badge

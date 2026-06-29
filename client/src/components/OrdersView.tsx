@@ -224,47 +224,78 @@ export function OrdersView() {
 
     const manaPoolOrders = payload?.data?.orders || [];
 
-    const normalizedOrders: OrderSummary[] = manaPoolOrders.map((o: any) => ({
-      id: o.id,
-      code: o.number || o.code || String(o.id),
-      state: o.status || o.state || "unknown",
-      orderAs: "Mana Pool",
-      buyer: {
-        username:
-          o.buyer?.username ||
-          o.buyer?.name ||
-          o.customer?.name ||
-          o.customer_name ||
-          "Unknown",
-        country:
-          o.buyer?.country ||
-          o.customer?.country ||
-          o.shipping_address?.country ||
-          "",
-      },
-      size:
-        o.items_count ||
-        o.line_items_count ||
-        o.quantity ||
-        o.items?.length ||
-        o.line_items?.length ||
-        0,
-      createdAt: o.created_at || o.createdAt || o.inserted_at || null,
-      sellerTotalCents:
-        o.seller_total_cents ||
-        o.total_cents ||
-        o.subtotal_cents ||
-        null,
-      sellerTotalCurrency:
-        o.seller_total_currency ||
-        o.currency ||
-        "USD",
-      formattedTotal:
-        o.formatted_total ||
-        o.total_formatted ||
-        null,
-      allocated: false,
-    }));
+    const normalizedOrders: OrderSummary[] = manaPoolOrders.map((o: any) => {
+  const items =
+    Array.isArray(o.items)
+      ? o.items
+      : Array.isArray(o.line_items)
+      ? o.line_items
+      : Array.isArray(o.order_items)
+      ? o.order_items
+      : Array.isArray(o.lines)
+      ? o.lines
+      : [];
+
+  const buyerName =
+    o.buyer?.username ||
+    o.buyer?.name ||
+    o.customer?.name ||
+    o.customer_name ||
+    o.shipping_address?.name ||
+    o.shippingAddress?.name ||
+    "Unknown";
+
+  const buyerCountry =
+    o.buyer?.country ||
+    o.customer?.country ||
+    o.shipping_address?.country ||
+    o.shippingAddress?.country ||
+    "";
+
+  const status =
+    o.latest_fulfillment_status ||
+    o.fulfillment_status ||
+    o.status ||
+    o.state ||
+    (Array.isArray(o.fulfillments) && o.fulfillments.length > 0
+      ? "fulfilled"
+      : "unfulfilled");
+
+  return {
+    id: o.id,
+    code: o.label || o.number || o.code || String(o.id),
+    state: status,
+    orderAs: "Mana Pool",
+    buyer: {
+      username: buyerName,
+      country: buyerCountry,
+    },
+    size:
+      o.items_count ||
+      o.line_items_count ||
+      o.quantity ||
+      items.reduce(
+        (sum: number, item: any) => sum + Number(item.quantity || item.qty || 1),
+        0
+      ),
+    createdAt: o.created_at || o.createdAt || o.inserted_at || null,
+    sellerTotalCents:
+      o.seller_total_cents ||
+      o.payment?.total_cents ||
+      o.total_cents ||
+      o.subtotal_cents ||
+      null,
+    sellerTotalCurrency:
+      o.seller_total_currency ||
+      o.currency ||
+      "USD",
+    formattedTotal:
+      o.formatted_total ||
+      o.total_formatted ||
+      null,
+    allocated: false,
+  };
+});
 
     setOrders(normalizedOrders);
   } catch (err: any) {

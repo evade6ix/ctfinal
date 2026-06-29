@@ -9,6 +9,7 @@ import mongoose from "mongoose";
 import binsRouter from "./routes/bins.js";
 import inventoryRouter from "./routes/inventory.js";
 import cardtraderRouter from "./routes/cardtrader.js";
+import cardtraderWebhooksRouter from "./routes/cardtraderWebhooks.js";
 import ordersRouter from "./routes/orders.js";
 import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
@@ -25,7 +26,15 @@ const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 
 app.use(cors());
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      // CardTrader webhook signatures are calculated against the original body.
+      // Keep a copy of the raw bytes before express parses JSON.
+      req.rawBody = Buffer.from(buf);
+    },
+  })
+);
 app.use(compression());
 
 // Healthcheck
@@ -36,6 +45,7 @@ app.get("/health", (req, res) => {
 // API routes
 app.use("/api/bins", binsRouter);
 app.use("/api/inventory", inventoryRouter);
+app.use("/api/ct/webhooks", cardtraderWebhooksRouter);
 app.use("/api/ct", cardtraderRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/order-articles", orderArticlesRouter);
@@ -82,6 +92,7 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
       console.log("✅ Mana Pool routes mounted at /api/manapool");
+      console.log("✅ CardTrader webhook routes mounted at /api/ct/webhooks");
 
       startOrderAutoSyncWorker({
         port: PORT,

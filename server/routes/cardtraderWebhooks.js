@@ -1,7 +1,5 @@
 // server/routes/cardtraderWebhooks.js
-import crypto from "crypto";
 import express from "express";
-import { syncCardTraderWebhookOrder } from "./orders.js";
 
 const router = express.Router();
 
@@ -14,197 +12,100 @@ function boolEnv(name, defaultValue = false) {
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
-function safeJsonPreview(value) {
-  try {
-    return JSON.stringify(value).slice(0, 1000);
-  } catch {
-    return String(value).slice(0, 1000);
-  }
-}
-
-function timingSafeEqualString(a, b) {
-  const aBuffer = Buffer.from(String(a || ""));
-  const bBuffer = Buffer.from(String(b || ""));
-
-  if (aBuffer.length !== bBuffer.length) return false;
-  return crypto.timingSafeEqual(aBuffer, bBuffer);
-}
-
-function verifyCardTraderSignature(req) {
-  const secret = process.env.CARDTRADER_WEBHOOK_SECRET;
-  const signature = req.get("Signature");
-  const rawBody = req.rawBody;
-
-  if (!secret) {
-    return {
-      ok: false,
-      reason: "missing_CARDTRADER_WEBHOOK_SECRET",
-    };
-  }
-
-  if (!signature) {
-    return {
-      ok: false,
-      reason: "missing_Signature_header",
-    };
-  }
-
-  if (!rawBody) {
-    return {
-      ok: false,
-      reason: "missing_raw_body_for_signature_verification",
-    };
-  }
-
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(rawBody, "utf8")
-    .digest("base64");
-
+function safeHeadersForLog(req) {
   return {
-    ok: timingSafeEqualString(expected, signature),
-    reason: "signature_mismatch",
-    expectedLength: expected.length,
-    receivedLength: String(signature).length,
+    "content-type": req.get("content-type") || null,
+    "user-agent": req.get("user-agent") || null,
+
+    // We only log whether these exist, not their values.
+    hasSignature: !!req.get("signature"),
+    hasXCardTraderSignature: !!req.get("x-cardtrader-signature"),
+    hasXSignature: !!req.get("x-signature"),
   };
 }
 
-function shouldProcessCardTraderWebhook(payload) {
-  const cause = String(payload?.cause || "");
-  const objectClass = String(payload?.object_class || "");
-
-  if (objectClass !== "Order") {
-    return {
-      ok: false,
-      reason: "not_order_webhook",
-      objectClass,
-      cause,
-    };
-  }
-
-  if (cause !== "order.create" && cause !== "order.update") {
-    return {
-      ok: false,
-      reason: "unsupported_cause",
-      objectClass,
-      cause,
-    };
-  }
-
-  if (!payload?.data || typeof payload.data !== "object") {
-    return {
-      ok: false,
-      reason: "missing_order_data",
-      objectClass,
-      cause,
-    };
-  }
-
+function safePayloadPreview(payload) {
   return {
-    ok: true,
-    cause,
-    objectClass,
+    id: payload?.id || null,
+    time: payload?.time || null,
+    cause: payload?.cause || null,
+    objectClass: payload?.object_class || null,
+    objectId: payload?.object_id || null,
+    mode: payload?.mode || null,
+
+    orderId: payload?.data?.id || null,
+    orderState: payload?.data?.state || null,
+    viaCardTraderZero: !!payload?.data?.via_cardtrader_zero,
+    orderItemsCount: Array.isArray(payload?.data?.order_items)
+      ? payload.data.order_items.length
+      : null,
   };
 }
 
 /**
  * POST /api/ct/webhooks/order
  *
- * CardTrader signs the raw JSON body using HMAC-SHA256 + the app shared_secret
- * and sends it in the Signature header.
+ * STEP 4 SAFE MODE:
+ * - Receives CardTrader webhooks
+ * - Logs basic info
+ * - Does NOT deduct inventory
+ * - Does NOT update ManaPool
  *
- * Safety switch:
- * CARDTRADER_WEBHOOKS_ENABLED=false means verify/log/ack only, no inventory changes.
+ * Later step:
+ * - We will add signature verification
+ * - Then we will call the existing safe reconcile logic
  */
 router.post("/order", async (req, res) => {
-  const startedAt = new Date();
   const payload = req.body || {};
+  const enabled = boolEnv("CARDTRADER_WEBHOOKS_ENABLED", false);
 
-  try {
-    const signatureCheck = verifyCardTraderSignature(req);
+  console.log("🧪 [CardTrader Webhook] Received", {
+    enabled,
+    headers: safeHeadersForLog(req),
+    payload: safePayloadPreview(payload),
+  });
 
-    if (!signatureCheck.ok) {
-      console.warn("⚠️ [CardTrader Webhook] Invalid signature", {
-        reason: signatureCheck.reason,
-        expectedLength: signatureCheck.expectedLength,
-        receivedLength: signatureCheck.receivedLength,
-        payloadPreview: safeJsonPreview(payload),
-      });
-
-      return res.status(401).json({
-        ok: false,
-        error: "invalid_cardtrader_webhook_signature",
-        reason: signatureCheck.reason,
-      });
-    }
-
-    const processCheck = shouldProcessCardTraderWebhook(payload);
-
-    if (!processCheck.ok) {
-      console.log("ℹ️ [CardTrader Webhook] Ignored webhook", {
-        ...processCheck,
-        id: payload?.id || null,
-        objectId: payload?.object_id || null,
-        mode: payload?.mode || null,
-      });
-
-      return res.json({
-        ok: true,
-        skipped: true,
-        ...processCheck,
-      });
-    }
-
-    const enabled = boolEnv("CARDTRADER_WEBHOOKS_ENABLED", false);
-
-    if (!enabled) {
-      console.log("🧪 [CardTrader Webhook] Verified but disabled", {
-        id: payload?.id || null,
-        cause: payload?.cause || null,
-        objectId: payload?.object_id || null,
-        mode: payload?.mode || null,
-        orderState: payload?.data?.state || null,
-        viaCardTraderZero: !!payload?.data?.via_cardtrader_zero,
-      });
-
-      return res.json({
-        ok: true,
-        verified: true,
-        disabled: true,
-        message:
-          "CardTrader webhook verified. Set CARDTRADER_WEBHOOKS_ENABLED=true to reconcile orders.",
-      });
-    }
-
-    const result = await syncCardTraderWebhookOrder(payload.data);
-
-    console.log("✅ [CardTrader Webhook] Processed", {
-      id: payload?.id || null,
-      cause: payload?.cause || null,
-      objectId: payload?.object_id || null,
-      mode: payload?.mode || null,
-      durationMs: Date.now() - startedAt.getTime(),
-      result,
-    });
-
+  // Only accept Order webhooks for now.
+  if (payload?.object_class !== "Order") {
     return res.json({
       ok: true,
-      verified: true,
-      processed: true,
-      result,
-    });
-  } catch (err) {
-    console.error("❌ [CardTrader Webhook] Failed", {
-      error: err?.response?.data || err?.message || err,
-      payloadPreview: safeJsonPreview(payload),
-    });
-
-    return res.status(500).json({
-      ok: false,
-      error: "cardtrader_webhook_failed",
-      details: err?.message || String(err),
+      skipped: true,
+      reason: "not_order_webhook",
+      objectClass: payload?.object_class || null,
+      cause: payload?.cause || null,
     });
   }
+
+  // Only log order.create and order.update for now.
+  if (payload?.cause !== "order.create" && payload?.cause !== "order.update") {
+    return res.json({
+      ok: true,
+      skipped: true,
+      reason: "unsupported_cause_for_step_4",
+      cause: payload?.cause || null,
+    });
+  }
+
+  // Safety switch. This should be false right now.
+  if (!enabled) {
+    return res.json({
+      ok: true,
+      received: true,
+      disabled: true,
+      message:
+        "CardTrader webhook received in safe log-only mode. No inventory was changed.",
+    });
+  }
+
+  // Extra safety: even if someone accidentally turns the env var on,
+  // Step 4 still does not process inventory yet.
+  return res.status(409).json({
+    ok: false,
+    received: true,
+    disabled: false,
+    error:
+      "CARDTRADER_WEBHOOKS_ENABLED is true, but live processing is not implemented in Step 4.",
+  });
 });
 
 export default router;

@@ -29,8 +29,6 @@ app.use(cors());
 app.use(
   express.json({
     verify: (req, res, buf) => {
-      // CardTrader webhook signatures are calculated against the original body.
-      // Keep a copy of the raw bytes before express parses JSON.
       req.rawBody = Buffer.from(buf);
     },
   })

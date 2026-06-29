@@ -31,21 +31,33 @@ function getManaPoolOrderCode(order) {
 }
 
 function getManaPoolOrderLines(order) {
-  return (
-    asArray(order?.order_items).length
-      ? asArray(order.order_items)
-      : asArray(order?.items).length
-      ? asArray(order.items)
-      : asArray(order?.lines).length
-      ? asArray(order.lines)
-      : asArray(order?.order_lines).length
-      ? asArray(order.order_lines)
-      : asArray(order?.seller_order_items).length
-      ? asArray(order.seller_order_items)
-      : asArray(order?.products).length
-      ? asArray(order.products)
-      : []
-  );
+  const candidates = [
+    asArray(order?.order_items),
+    asArray(order?.line_items),
+    asArray(order?.items),
+    asArray(order?.lines),
+    asArray(order?.order_lines),
+    asArray(order?.seller_order_items),
+    asArray(order?.articles),
+    asArray(order?.products),
+
+    // Extra defensive nested shapes
+    asArray(order?.data?.order_items),
+    asArray(order?.data?.line_items),
+    asArray(order?.data?.items),
+    asArray(order?.data?.lines),
+    asArray(order?.data?.order_lines),
+    asArray(order?.data?.seller_order_items),
+    asArray(order?.data?.articles),
+    asArray(order?.data?.products),
+  ];
+
+  // Pick the largest available line array.
+  // This prevents ManaPool "items" with only the first card
+  // from beating "line_items" with the full order.
+  return candidates.reduce((best, current) => {
+    return current.length > best.length ? current : best;
+  }, []);
 }
 
 function getLineStableIds(line, index) {
@@ -90,10 +102,15 @@ function getLineName(line) {
   return (
     line?.name ||
     line?.product_name ||
+    line?.card_name ||
     line?.title ||
     line?.product?.name ||
+    line?.product?.card_name ||
     line?.single?.name ||
+    line?.single?.card_name ||
     line?.product?.single?.name ||
+    line?.product?.single?.card_name ||
+    line?.card?.name ||
     "Unknown ManaPool item"
   );
 }
@@ -313,24 +330,36 @@ export async function reconcileManaPoolOrder(order, options = {}) {
       continue;
     }
 
-    const existing = await OrderAllocation.findOne({
-      source: "manapool",
-      orderId,
-      orderItemId,
-    }).lean();
+    const manaPoolInventoryIdForExisting = getLineManaPoolInventoryId(line);
 
-    if (existing) {
-      skippedExisting++;
+const existingOr = [
+  { orderItemId },
+  { marketplaceOrderItemId },
+];
 
-      dryRunActions.push({
-        action: "skip_existing_allocation",
-        orderItemId,
-        marketplaceOrderItemId,
-        existingAllocationId: existing._id?.toString?.() || null,
-      });
+if (manaPoolInventoryIdForExisting) {
+  existingOr.push({ manapoolInventoryId: manaPoolInventoryIdForExisting });
+}
 
-      continue;
-    }
+const existing = await OrderAllocation.findOne({
+  source: "manapool",
+  orderId,
+  $or: existingOr,
+}).lean();
+
+if (existing) {
+  skippedExisting++;
+
+  dryRunActions.push({
+    action: "skip_existing_allocation",
+    orderItemId,
+    marketplaceOrderItemId,
+    manapoolInventoryId: manaPoolInventoryIdForExisting || null,
+    existingAllocationId: existing._id?.toString?.() || null,
+  });
+
+  continue;
+}
 
     const {
       inventoryItem: invItem,

@@ -17,6 +17,7 @@ import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
 import manapoolRouter from "./routes/manapool.js";
+import stagedPushRouter from "./routes/stagedPush.js";
 
 // Auto-sync worker
 import { startOrderAutoSyncWorker } from "./services/orderAutoSyncWorker.js";
@@ -52,6 +53,7 @@ app.use("/api/changelog", changelogRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
+app.use("/api/staged-push", stagedPushRouter);
 
 // Mana Pool routes
 app.use("/api/manapool", manapoolRouter);
@@ -91,6 +93,7 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
       console.log("✅ Mana Pool routes mounted at /api/manapool");
+      console.log("✅ Staged push routes mounted at /api/staged-push");
       console.log("✅ CardTrader webhook routes mounted at /api/ct/webhooks");
 
       startOrderAutoSyncWorker({

@@ -554,12 +554,12 @@ export function OrdersWeeklyGroupedView() {
                                         {visibleItems.map((it) => {
                                           const isPicked = !!it.picked;
                                           const originalIndex = allItems.indexOf(it);
-                                          const key = `${o.id}-$${
+                                          const key = `${o.id}-${
                                             it.cardTraderId ?? `idx-${originalIndex}`
                                           }`;
                                           const isBusy =
                                             pickingKey ===
-                                            `${o.id}-$${
+                                            `${o.id}-${
                                               it.cardTraderId ?? `idx-${originalIndex}`
                                             }`;
 

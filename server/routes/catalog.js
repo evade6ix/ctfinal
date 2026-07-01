@@ -1,5 +1,6 @@
 import express from "express";
 import axios from "axios";
+import { CatalogSetCache } from "../models/CatalogSetCache.js";
 
 const router = express.Router();
 
@@ -14,27 +15,24 @@ function ct() {
   return axios.create({
     baseURL: CT_BASE,
     headers: { Authorization: `Bearer ${TOKEN}` },
-    timeout: 20000,
+    timeout: 30000,
   });
 }
 
-// =======================
-// Tiny market-price cache
-// =======================
-const MARKET_TTL_MS = 30 * 1000; // 30 seconds
-// key: blueprintId::condition -> { at, value }
+const MARKET_TTL_MS = process.env.CATALOG_MARKET_CACHE_TTL_MS
+  ? Number(process.env.CATALOG_MARKET_CACHE_TTL_MS)
+  : 5 * 60 * 1000;
+
+const SET_CACHE_TTL_MS = process.env.CATALOG_SET_CACHE_TTL_MS
+  ? Number(process.env.CATALOG_SET_CACHE_TTL_MS)
+  : 24 * 60 * 60 * 1000;
+
 const marketCache = new Map();
+let expansionsCache = { at: 0, data: [] };
+const EXPANSIONS_TTL_MS = 60 * 60 * 1000;
 
 function normalizeCondition(value) {
   return (value || "").toString().trim().toUpperCase();
-}
-
-function listingIsZero(listing) {
-  return (
-    listing?.via_cardtrader_zero === true ||
-    listing?.cardtrader_zero === true ||
-    listing?.zero === true
-  );
 }
 
 function listingCondition(listing) {
@@ -46,6 +44,7 @@ function listingCondition(listing) {
       ""
   );
 }
+
 async function getMarketPriceForBlueprint(client, blueprintId) {
   const key = String(blueprintId);
   const now = Date.now();
@@ -105,6 +104,104 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
   }
 }
 
+async function getExpansions(client) {
+  const now = Date.now();
+
+  if (expansionsCache.data.length && now - expansionsCache.at < EXPANSIONS_TTL_MS) {
+    return expansionsCache.data;
+  }
+
+  const { data } = await client.get("/expansions");
+  const expArr = Array.isArray(data)
+    ? data
+    : Array.isArray(data && data.expansions)
+    ? data.expansions
+    : [];
+
+  expansionsCache = { at: now, data: expArr };
+  return expArr;
+}
+
+function normalizeBlueprint(bp, exp) {
+  const fixed = bp.fixed_properties || {};
+
+  return {
+    id: bp.id,
+    name: bp.name,
+    version: bp.version,
+    rarity:
+      fixed.yugioh_rarity ||
+      fixed.rarity ||
+      fixed.mtg_rarity ||
+      bp.version ||
+      null,
+    number: fixed.collector_number || null,
+    gameId: bp.game_id,
+    categoryId: bp.category_id,
+    expansionId: bp.expansion_id,
+    setCode: exp?.code || "",
+    setName: exp?.name || "",
+    scryfallId: bp.scryfall_id,
+    tcgPlayerId: bp.tcg_player_id,
+    cardMarketIds: bp.card_market_ids,
+    imageUrl: bp.image_url,
+  };
+}
+
+function isFreshCache(cacheDoc) {
+  return (
+    cacheDoc &&
+    Array.isArray(cacheDoc.blueprints) &&
+    cacheDoc.expiresAt &&
+    new Date(cacheDoc.expiresAt).getTime() > Date.now()
+  );
+}
+
+async function fetchAndCacheSet(client, gameId, expansionId, expansion) {
+  const exp = expansion || { id: expansionId, code: "", name: "", game_id: gameId };
+
+  const { data } = await client.get("/blueprints/export", {
+    params: { expansion_id: expansionId },
+  });
+
+  const rawBlueprints = Array.isArray(data) ? data : [];
+  const blueprints = rawBlueprints.map((bp) => normalizeBlueprint(bp, exp));
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SET_CACHE_TTL_MS);
+
+  const doc = await CatalogSetCache.findOneAndUpdate(
+    { expansionId },
+    {
+      $set: {
+        gameId,
+        expansionId,
+        setCode: exp.code || "",
+        setName: exp.name || "",
+        blueprintCount: blueprints.length,
+        blueprints,
+        fetchedAt: now,
+        expiresAt,
+      },
+    },
+    { upsert: true, new: true }
+  ).lean();
+
+  return { doc, cached: false };
+}
+
+async function getCachedSetOrFetch(client, gameId, expansionId, expansionsById, force = false) {
+  const existing = !force
+    ? await CatalogSetCache.findOne({ expansionId }).lean()
+    : null;
+
+  if (isFreshCache(existing)) {
+    return { doc: existing, cached: true };
+  }
+
+  const expansion = expansionsById.get(expansionId) || null;
+  return fetchAndCacheSet(client, gameId, expansionId, expansion);
+}
+
 // =======================
 // GET /api/catalog/games
 // =======================
@@ -148,22 +245,34 @@ router.get("/sets", async (req, res) => {
 
   try {
     const client = ct();
-    const { data } = await client.get("/expansions");
-
-    const expArr = Array.isArray(data)
-      ? data
-      : Array.isArray(data && data.expansions)
-      ? data.expansions
-      : [];
-
+    const expArr = await getExpansions(client);
     const expansions = expArr.filter((exp) => exp.game_id === gameId);
 
-    const sets = expansions.map((exp) => ({
-      id: exp.id,
-      code: exp.code,
-      name: exp.name,
-      gameId: exp.game_id,
-    }));
+    const cachedSetIds = await CatalogSetCache.find({
+      gameId,
+      expiresAt: { $gt: new Date() },
+    })
+      .select("expansionId blueprintCount fetchedAt expiresAt")
+      .lean();
+
+    const cacheByExpansionId = new Map(
+      cachedSetIds.map((doc) => [Number(doc.expansionId), doc])
+    );
+
+    const sets = expansions.map((exp) => {
+      const cached = cacheByExpansionId.get(Number(exp.id));
+
+      return {
+        id: exp.id,
+        code: exp.code,
+        name: exp.name,
+        gameId: exp.game_id,
+        cached: !!cached,
+        cachedBlueprintCount: cached?.blueprintCount || 0,
+        cachedAt: cached?.fetchedAt || null,
+        cacheExpiresAt: cached?.expiresAt || null,
+      };
+    });
 
     res.json({ sets });
   } catch (err) {
@@ -179,10 +288,65 @@ router.get("/sets", async (req, res) => {
 });
 
 // =======================
+// POST /api/catalog/cache-set
+// Body: { gameId, setId, force }
+// Fetches one set into Mongo so searches can read locally.
+// =======================
+router.post("/cache-set", async (req, res) => {
+  let { gameId, setId, force } = req.body || {};
+  gameId = Number(gameId);
+  const expansionId = Number(setId);
+
+  if (!gameId) {
+    return res.status(400).json({ error: "Missing or invalid gameId" });
+  }
+
+  if (!Number.isFinite(expansionId) || expansionId <= 0) {
+    return res.status(400).json({ error: "Missing or invalid setId" });
+  }
+
+  try {
+    const client = ct();
+    const expArr = await getExpansions(client);
+    const expansionsById = new Map(expArr.map((exp) => [Number(exp.id), exp]));
+
+    const startedAt = Date.now();
+    const { doc, cached } = await getCachedSetOrFetch(
+      client,
+      gameId,
+      expansionId,
+      expansionsById,
+      force === true
+    );
+
+    return res.json({
+      ok: true,
+      cached,
+      setId: expansionId,
+      setCode: doc?.setCode || "",
+      setName: doc?.setName || "",
+      blueprintCount: doc?.blueprintCount || 0,
+      fetchedAt: doc?.fetchedAt || null,
+      expiresAt: doc?.expiresAt || null,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    console.error(
+      `Error caching catalog set ${expansionId}:`,
+      err.response?.data || err.message
+    );
+
+    res.status(500).json({
+      error: "Failed to cache catalog set",
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
+// =======================
 // POST /api/catalog/search
-// Body: { gameId, setIds: [expansionId], query, page, pageSize, condition }
-// Returns CardTrader blueprints WITH market price
-// market = LOWEST ZERO ENGLISH listing for selected condition
+// Body: { gameId, setIds: [expansionId], query, page, pageSize }
+// Uses Mongo set cache first. Missing/expired sets are fetched and cached.
 // =======================
 router.post("/search", async (req, res) => {
   let { gameId, setIds, query, page, pageSize } = req.body || {};
@@ -191,13 +355,14 @@ router.post("/search", async (req, res) => {
   page = Number(page) || 1;
   pageSize = Number(pageSize) || 50;
   if (!Array.isArray(setIds)) setIds = [];
+  const normalizedSetIds = [...new Set(setIds.map(Number).filter(Boolean))];
   const trimmedQuery = (query || "").toString().trim().toLowerCase();
 
   if (!gameId) {
     return res.status(400).json({ error: "Missing or invalid gameId" });
   }
 
-  if (setIds.length === 0) {
+  if (normalizedSetIds.length === 0) {
     return res
       .status(400)
       .json({ error: "You must provide at least one set (expansion) id" });
@@ -205,66 +370,43 @@ router.post("/search", async (req, res) => {
 
   try {
     const client = ct();
-
-    const { data: expData } = await client.get("/expansions");
-    const expArr = Array.isArray(expData)
-      ? expData
-      : Array.isArray(expData && expData.expansions)
-      ? expData.expansions
-      : [];
-
-    const expansionsById = new Map(expArr.map((exp) => [exp.id, exp]));
-
+    const expArr = await getExpansions(client);
+    const expansionsById = new Map(expArr.map((exp) => [Number(exp.id), exp]));
     const allBlueprints = [];
+    const cacheReport = [];
 
-    for (const expansionIdRaw of setIds) {
-      const expansionId = Number(expansionIdRaw);
-      if (!expansionId) continue;
-
+    for (const expansionId of normalizedSetIds) {
       try {
-        const { data } = await client.get("/blueprints/export", {
-          params: { expansion_id: expansionId },
-        });
+        const { doc, cached } = await getCachedSetOrFetch(
+          client,
+          gameId,
+          expansionId,
+          expansionsById
+        );
 
-        (data || []).forEach((bp) => {
-          const exp = expansionsById.get(bp.expansion_id);
-          allBlueprints.push({
-  id: bp.id,
-  name: bp.name,
-  version: bp.version,
+        if (doc?.blueprints?.length) {
+          allBlueprints.push(...doc.blueprints);
+        }
 
-  // YGO / generic blueprint metadata
-  rarity:
-    bp.fixed_properties?.yugioh_rarity ||
-    bp.fixed_properties?.rarity ||
-    bp.fixed_properties?.mtg_rarity ||
-    bp.version ||
-    null,
-
-  number:
-    bp.fixed_properties?.collector_number ||
-    null,
-
-  gameId: bp.game_id,
-  categoryId: bp.category_id,
-  expansionId: bp.expansion_id,
-  setCode: exp && exp.code,
-  setName: exp && exp.name,
-  scryfallId: bp.scryfall_id,
-  tcgPlayerId: bp.tcg_player_id,
-  cardMarketIds: bp.card_market_ids,
-  imageUrl: bp.image_url,
-});
+        cacheReport.push({
+          setId: expansionId,
+          cached,
+          blueprintCount: doc?.blueprintCount || doc?.blueprints?.length || 0,
         });
       } catch (err) {
         console.error(
-          `Error fetching blueprints for expansion ${expansionId}:`,
+          `Error loading cached blueprints for expansion ${expansionId}:`,
           err.response?.data || err.message
         );
+        cacheReport.push({
+          setId: expansionId,
+          cached: false,
+          error: err.response?.data || err.message,
+        });
       }
     }
 
-    let filtered = allBlueprints.filter((bp) => bp.gameId === gameId);
+    let filtered = allBlueprints.filter((bp) => Number(bp.gameId) === gameId);
 
     if (trimmedQuery) {
       filtered = filtered.filter(
@@ -285,71 +427,25 @@ router.post("/search", async (req, res) => {
     const slice = filtered.slice(start, end);
 
     const items = await Promise.all(
-  slice.map(async (bp) => {
-    const market = await getMarketPriceForBlueprint(client, bp.id);
+      slice.map(async (bp) => {
+        const market = await getMarketPriceForBlueprint(client, bp.id);
 
-    let rarity = bp.rarity || bp.version || null;
-let edition = null;
-let finish = null;
+        return {
+          ...bp,
+          market,
+          rarity: bp.rarity || bp.version || null,
+          edition: null,
+          finish: null,
+        };
+      })
+    );
 
-    try {
-      const resp = await client.get("/marketplace/products", {
-        params: {
-          blueprint_id: bp.id,
-          language: "en",
-        },
-      });
-
-      const arr = Array.isArray(resp.data[String(bp.id)])
-        ? resp.data[String(bp.id)]
-        : [];
-
-      if (arr.length) {
-        const first = arr[0];
-        const p = first?.properties || {};
-
-        rarity =
-  bp.rarity ||
-  bp.version ||
-  p.yugioh_rarity ||
-  p.rarity ||
-  p.mtg_rarity ||
-  null;
-
-        edition =
-          p.edition ||
-          p.yugioh_edition ||
-          null;
-
-        finish =
-          typeof p.foil === "boolean"
-            ? p.foil
-              ? "Foil"
-              : null
-            : p.finish ||
-              p.foiling ||
-              p.yugioh_foil ||
-              null;
-      }
-    } catch (e) {
-      // ignore — fallback to null
-    }
-
-    return {
-      ...bp,
-      market,
-      rarity,
-      edition,
-      finish,
-    };
-  })
-);
-
-res.json({
+    res.json({
       items,
       total,
       page,
       pageSize,
+      cache: cacheReport,
     });
   } catch (err) {
     console.error(

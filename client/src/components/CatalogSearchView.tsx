@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Badge,
@@ -12,6 +12,7 @@ import {
   NumberInput,
   Pagination,
   Paper,
+  Progress,
   Select,
   SegmentedControl,
   Stack,
@@ -38,6 +39,7 @@ type SetOption = {
   value: string;
   label: string;
   code?: string;
+  cached?: boolean;
 };
 
 type BinOption = {
@@ -76,6 +78,13 @@ type StagedItem = {
 };
 
 type PushMode = "all" | "manapool" | "cardtrader";
+
+type CatalogCacheProgress = {
+  total: number;
+  done: number;
+  currentSetLabel: string;
+  errors: string[];
+};
 
 const PAGE_SIZE = 50;
 const STAGED_STORAGE_KEY = "ct_staged_v1";
@@ -137,6 +146,11 @@ export function CatalogSearchView() {
   const [binError, setBinError] = useState<string | null>(null);
   const [destBinId, setDestBinId] = useState<string | null>(null);
   const [destRow, setDestRow] = useState<number | null>(null);
+
+  const [cachedSetIds, setCachedSetIds] = useState<Set<string>>(new Set());
+  const [catalogCacheProgress, setCatalogCacheProgress] =
+    useState<CatalogCacheProgress | null>(null);
+  const cacheRunRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -228,6 +242,7 @@ export function CatalogSearchView() {
     if (!gameId) {
       setSets([]);
       setSelectedSetIds([]);
+      setCachedSetIds(new Set());
       return;
     }
 
@@ -264,10 +279,14 @@ export function CatalogSearchView() {
           value: String(s.id),
           label: s.code ? `${s.code} – ${s.name}` : String(s.name || "Unknown"),
           code: s.code,
+          cached: !!s.cached,
         }));
 
         setSets(mapped);
         setSelectedSetIds([]);
+        setCachedSetIds(
+          new Set(mapped.filter((s) => s.cached).map((s) => String(s.value)))
+        );
       } catch (err: any) {
         console.error("Error loading sets:", err);
         setError(err.message || "Failed to load sets");
@@ -310,6 +329,80 @@ export function CatalogSearchView() {
 
     fetchBins();
   }, []);
+
+  useEffect(() => {
+    if (!gameId || selectedSetIds.length === 0) {
+      setCatalogCacheProgress(null);
+      return;
+    }
+
+    const missingSetIds = selectedSetIds.filter((setId) => !cachedSetIds.has(setId));
+    if (missingSetIds.length === 0) {
+      setCatalogCacheProgress(null);
+      return;
+    }
+
+    const runId = cacheRunRef.current + 1;
+    cacheRunRef.current = runId;
+    let cancelled = false;
+
+    async function cacheSelectedSets() {
+      const errors: string[] = [];
+
+      for (let i = 0; i < missingSetIds.length; i++) {
+        if (cancelled || cacheRunRef.current !== runId) return;
+
+        const setId = missingSetIds[i];
+        const setLabel = sets.find((s) => s.value === setId)?.label || `Set ${setId}`;
+
+        setCatalogCacheProgress({
+          total: missingSetIds.length,
+          done: i,
+          currentSetLabel: setLabel,
+          errors,
+        });
+
+        try {
+          const res = await fetch("/api/catalog/cache-set", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ gameId, setId }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data?.error || `Failed to cache ${setLabel}`);
+          }
+
+          setCachedSetIds((prev) => {
+            const next = new Set(prev);
+            next.add(String(setId));
+            return next;
+          });
+        } catch (err: any) {
+          console.error("Set cache failed:", setLabel, err);
+          errors.push(`${setLabel}: ${err.message || "failed"}`);
+        }
+
+        setCatalogCacheProgress({
+          total: missingSetIds.length,
+          done: i + 1,
+          currentSetLabel: setLabel,
+          errors,
+        });
+      }
+
+      if (!cancelled && cacheRunRef.current === runId) {
+        setCatalogCacheProgress(null);
+      }
+    }
+
+    cacheSelectedSets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId, selectedSetIds, sets, cachedSetIds]);
 
   async function runSearch(targetPage?: number) {
     if (!gameId) {
@@ -363,6 +456,18 @@ export function CatalogSearchView() {
         : Array.isArray(data.items)
         ? data.items
         : [];
+
+      if (Array.isArray(data.cache)) {
+        setCachedSetIds((prev) => {
+          const next = new Set(prev);
+          data.cache.forEach((cacheRow: any) => {
+            if (cacheRow?.setId && !cacheRow?.error) {
+              next.add(String(cacheRow.setId));
+            }
+          });
+          return next;
+        });
+      }
 
       const mapped: CatalogCard[] = itemsRaw.map((c: any) => ({
         id: c.id ?? `${c.setCode}-${c.name}`,
@@ -508,6 +613,9 @@ export function CatalogSearchView() {
   }
 
   const pushDisabled = staged.length === 0 || pushingMode != null;
+  const catalogCachePercent = catalogCacheProgress
+    ? Math.round((catalogCacheProgress.done / catalogCacheProgress.total) * 100)
+    : 0;
 
   return (
     <Stack gap="md">
@@ -574,6 +682,28 @@ export function CatalogSearchView() {
           </Group>
         </Group>
       </Paper>
+
+      {catalogCacheProgress && (
+        <Paper withBorder radius="md" p="sm">
+          <Group justify="space-between" mb={6}>
+            <Text size="sm" fw={600}>
+              Loading selected sets into fast cache
+            </Text>
+            <Badge variant="light">
+              {catalogCacheProgress.done}/{catalogCacheProgress.total} sets
+            </Badge>
+          </Group>
+          <Progress value={catalogCachePercent} radius="xl" />
+          <Text size="xs" c="dimmed" mt={6}>
+            Fetching {catalogCacheProgress.currentSetLabel}… {catalogCachePercent}%
+          </Text>
+          {catalogCacheProgress.errors.length > 0 && (
+            <Text size="xs" c="red" mt={4}>
+              {catalogCacheProgress.errors.length} set cache error(s). Check console for details.
+            </Text>
+          )}
+        </Paper>
+      )}
 
       <Tabs defaultValue="search" keepMounted={false}>
         <Tabs.List>

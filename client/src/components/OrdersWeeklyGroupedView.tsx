@@ -1,4 +1,4 @@
-import { useEffect, useState, Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   Badge,
   Box,
@@ -21,29 +21,27 @@ type ApiOrder = {
 };
 
 type WeeklySummary = {
-  weekStart: string; // e.g. "2026-01-20"
+  shipmentId?: string;
+  weekStart: string;
+  shipmentDate?: string;
   totalOrders: number;
   totalValueCents: number;
-  totalValue?: string; // added in backend
+  totalValue?: string;
   orders: ApiOrder[];
 };
 
 type OrderItem = {
-  id?: number; // CardTrader order line id
-  cardTraderId?: number;
-  blueprintId?: number;
+  id?: number | string;
+  cardTraderId?: number | null;
+  blueprintId?: number | null;
   name?: string;
   quantity?: number;
-  image_url?: string; // Scryfall URL from /api/order-articles or /image
-  set_name?: string;
+  image_url?: string | null;
+  set_name?: string | null;
   binLocations?: { bin: string; row: number; quantity: number }[];
-
-  // Comes from backend OrderAllocation
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
-
-  // NEW
   isFoil?: boolean;
   condition?: string | null;
 };
@@ -53,29 +51,20 @@ type FilterMode = "all" | "picked" | "unpicked";
 export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
   const [loading, setLoading] = useState(false);
-
-  const [expandedOrderId, setExpandedOrderId] = useState<
-    string | number | null
-  >(null);
-
+  const [expandedOrderId, setExpandedOrderId] = useState<string | number | null>(
+    null
+  );
   const [itemsByOrder, setItemsByOrder] = useState<
     Record<string | number, OrderItem[]>
   >({});
-
   const [loadingItems, setLoadingItems] = useState(false);
-
-  // Which line is currently being updated (for a tiny loading state)
   const [pickingKey, setPickingKey] = useState<string | null>(null);
-
-  // Global filter for picked / unpicked / all
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
 
-  // ───────────────────────────────────────────────
-  // Initial weekly summaries
-  // ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       setLoading(true);
+
       try {
         const weeklyRes = await fetch("/api/orders-weekly");
         const weeklyJson = await weeklyRes.json();
@@ -91,10 +80,11 @@ export function OrdersWeeklyGroupedView() {
 
   const formatWeekLabel = (weekStart: string) => {
     const start = new Date(weekStart);
-    if (isNaN(start.getTime())) return weekStart;
+
+    if (Number.isNaN(start.getTime())) return weekStart;
 
     const end = new Date(start);
-    end.setDate(start.getDate() + 6); // 7-day window
+    end.setDate(start.getDate() + 6);
 
     const startStr = start.toLocaleDateString("en-CA", {
       month: "short",
@@ -111,39 +101,31 @@ export function OrdersWeeklyGroupedView() {
     return `${startStr} – ${endStr}`;
   };
 
-  // Sort items:
-//  1) Items WITH bins first
-//  2) Items WITHOUT bins: set_name → name
-//  3) Items WITH bins: bin → row → set_name → name
-const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
-  return [...items].sort((a, b) => {
-    const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
-    const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
+  const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
+    return [...items].sort((a, b) => {
+      const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
+      const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
 
-    // 1) Items WITH bins first
-    if (aHasBin && !bHasBin) return -1;
-    if (!aHasBin && bHasBin) return 1;
+      if (aHasBin && !bHasBin) return -1;
+      if (!aHasBin && bHasBin) return 1;
 
-    // 2) Both HAVE bins → sort by bin → row → set_name → name
-    if (aHasBin && bHasBin) {
-      const aLoc = a.binLocations![0];
-      const bLoc = b.binLocations![0];
+      if (aHasBin && bHasBin) {
+        const aLoc = a.binLocations![0];
+        const bLoc = b.binLocations![0];
 
-      const aBin = (aLoc.bin || "").toString();
-      const bBin = (bLoc.bin || "").toString();
+        const aBin = (aLoc.bin || "").toString();
+        const bBin = (bLoc.bin || "").toString();
 
-      if (aBin !== bBin) {
-        return aBin.localeCompare(bBin, undefined, { numeric: true });
+        if (aBin !== bBin) {
+          return aBin.localeCompare(bBin, undefined, { numeric: true });
+        }
+
+        const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
+        const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
+
+        if (aRow !== bRow) return aRow - bRow;
       }
 
-      const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
-      const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
-
-      if (aRow !== bRow) {
-        return aRow - bRow;
-      }
-
-      // 👉 Inside the SAME bin & row, sort by set_name then name
       const aSet = (a.set_name || "").toString();
       const bSet = (b.set_name || "").toString();
 
@@ -155,31 +137,9 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
       const bName = (b.name || "").toString();
 
       return aName.localeCompare(bName, undefined, { numeric: true });
-    }
+    });
+  };
 
-    // 3) Neither has bins → group/sort by set_name, then name
-    const aSet = (a.set_name || "").toString();
-    const bSet = (b.set_name || "").toString();
-
-    if (aSet !== bSet) {
-      return aSet.localeCompare(bSet, undefined, { numeric: true });
-    }
-
-    const aName = (a.name || "").toString();
-    const bName = (b.name || "").toString();
-
-    return aName.localeCompare(bName, undefined, { numeric: true });
-  });
-};
-
-
-
-
-
-
-
-
-  // ⭐ Scryfall-only image selection: image_url → placeholder
   const getCardImageSrc = (it: OrderItem) => {
     if (
       it.image_url &&
@@ -189,25 +149,17 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
       return it.image_url;
     }
 
-    // FINAL fallback – local placeholder
     return "/card-placeholder.png";
   };
 
-  // Small helper to apply picked/unpicked filter
   const filterItems = (items: OrderItem[], mode: FilterMode): OrderItem[] => {
-    if (mode === "picked") {
-      return items.filter((it) => !!it.picked);
-    }
-    if (mode === "unpicked") {
-      return items.filter((it) => !it.picked);
-    }
+    if (mode === "picked") return items.filter((it) => !!it.picked);
+    if (mode === "unpicked") return items.filter((it) => !it.picked);
     return items;
   };
 
-  // Load items for a single order from /api/order-articles/:id
-  // Now uses skipImages=1 to avoid Scryfall on initial load (faster)
   const loadItems = async (orderId: string | number) => {
-    if (itemsByOrder[orderId]) return; // already cached
+    if (itemsByOrder[orderId]) return;
 
     try {
       setLoadingItems(true);
@@ -223,8 +175,8 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
         return;
       }
 
-      const data = (await res.json()) as OrderItem[];
-      const sorted = sortOrderItems(data);
+      const loadedItems = (await res.json()) as OrderItem[];
+      const sorted = sortOrderItems(Array.isArray(loadedItems) ? loadedItems : []);
 
       setItemsByOrder((prev) => ({
         ...prev,
@@ -239,22 +191,19 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
   };
 
   const handleToggleOrder = (order: ApiOrder) => {
-  const orderId = Number(order.id);
+    const orderId = Number(order.id);
 
-  if (!Number.isFinite(orderId)) {
-    console.error("Invalid numeric CardTrader order id:", order);
-    return;
-  }
+    if (!Number.isFinite(orderId)) {
+      console.error("Invalid numeric CardTrader order id:", order);
+      return;
+    }
 
-  const willExpand = expandedOrderId !== orderId;
-  setExpandedOrderId(willExpand ? orderId : null);
+    const willExpand = expandedOrderId !== orderId;
+    setExpandedOrderId(willExpand ? orderId : null);
 
-  if (willExpand) {
-    loadItems(orderId);
-  }
-};
+    if (willExpand) loadItems(orderId);
+  };
 
-  // On-demand: fetch real image for a single card by name
   const handleShowImage = async (
     orderId: string | number,
     index: number,
@@ -278,12 +227,8 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
       }
 
       const json = (await res.json()) as { image_url?: string | null };
-      if (!json.image_url) {
-        console.warn("No image_url returned for", name);
-        return;
-      }
+      if (!json.image_url) return;
 
-      // Update just that one item in state
       setItemsByOrder((prev) => {
         const existing = prev[orderId];
         if (!existing) return prev;
@@ -294,7 +239,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
 
         clone[index] = {
           ...original,
-          image_url: json.image_url || original.image_url,
+          image_url: json.image_url,
         };
 
         return {
@@ -307,11 +252,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     }
   };
 
-  // ───────────────────────────────────────────────
-  // Persistent pick / unpick
-  // ───────────────────────────────────────────────
-
-  // Send PATCH /api/order-allocations/pick
   async function persistPick(
     orderId: string | number,
     index: number,
@@ -321,17 +261,16 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     setPickingKey(key);
 
     try {
-      // Only hit backend if we have a cardTraderId
       if (item.cardTraderId) {
         const res = await fetch("/api/order-allocations/pick", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-  orderId,
-  orderItemId: item.id,
-  cardTraderId: item.cardTraderId,
-  pickedBy: "local", // later: use real username
-}),
+            orderId,
+            orderItemId: item.id,
+            cardTraderId: item.cardTraderId,
+            pickedBy: "local",
+          }),
         });
 
         if (!res.ok) {
@@ -339,7 +278,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
         }
       }
 
-      // Always update local item state (even if no cardTraderId)
       setItemsByOrder((prev) => {
         const arr = prev[orderId];
         if (!arr) return prev;
@@ -360,7 +298,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     }
   }
 
-  // Send PATCH /api/order-allocations/unpick
   async function persistUnpick(
     orderId: string | number,
     index: number,
@@ -370,16 +307,15 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     setPickingKey(key);
 
     try {
-      // Only hit backend if we have a cardTraderId
       if (item.cardTraderId) {
         const res = await fetch("/api/order-allocations/unpick", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-  orderId,
-  orderItemId: item.id,
-  cardTraderId: item.cardTraderId,
-}),
+            orderId,
+            orderItemId: item.id,
+            cardTraderId: item.cardTraderId,
+          }),
         });
 
         if (!res.ok) {
@@ -387,7 +323,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
         }
       }
 
-      // Always update local item state (even if no cardTraderId)
       setItemsByOrder((prev) => {
         const arr = prev[orderId];
         if (!arr) return prev;
@@ -408,13 +343,9 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     }
   }
 
-  // Mark all items up to (and including) this index as picked (persistent)
-  async function handleMarkFulfilledUpTo(
-    orderId: string | number,
-    index: number
-  ) {
+  async function handleMarkFulfilledUpTo(orderId: string | number, index: number) {
     const items = itemsByOrder[orderId] || [];
-    // Sequentially pick each one to keep state consistent
+
     for (let i = 0; i <= index; i++) {
       const item = items[i];
       if (item && !item.picked) {
@@ -428,12 +359,12 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
     <Stack gap="md">
       <Title order={3}>CardTrader Zero – Weekly Shipments</Title>
       <Text size="sm" c="dimmed">
-        Every Wednesday → Tuesday. All PAID orders combined. Click an order to
-        see its cards sorted by bin and row. Images load on demand. Picked
-        lines are stored in Mongo and shared with your other views.
+        Every Wednesday → Tuesday. The live consolidated CT Zero shipment appears
+        once CardTrader creates the paid shipment order. Click an order to see
+        its cards sorted by bin and row. Images load on demand. Picked lines are
+        stored in Mongo and shared with your other views.
       </Text>
 
-      {/* Global picked/unpicked filter */}
       <Group gap="xs">
         <Text size="xs" c="dimmed">
           Filter lines:
@@ -471,34 +402,33 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
 
       {!loading && data.length === 0 && (
         <Text size="sm" c="dimmed">
-          No weekly data available.
+          No live paid CT Zero shipment available yet.
         </Text>
       )}
 
       {!loading &&
-  data.map((week) => {
-    const label = formatWeekLabel(week.weekStart);
-   const eligibleOrders = (week.orders || []).filter((o) => {
-  const state = String(o.state || "").toLowerCase();
-  return state === "hub_pending";
-});
+        data.map((week) => {
+          const label = formatWeekLabel(week.weekStart);
+          const shipmentOrders = (week.orders || []).filter((o) => {
+            const state = String(o.state || "").toLowerCase();
+            return state === "paid";
+          });
 
           return (
             <Paper
-              key={week.weekStart}
+              key={week.shipmentId || week.weekStart}
               p="md"
               radius="md"
               withBorder
               style={{ background: "var(--mantine-color-dark-7)" }}
             >
-              {/* HEADER */}
               <Group justify="space-between" mb="sm">
                 <Stack gap={2}>
                   <Text fw={600} size="lg">
                     {label}
                   </Text>
                   <Text size="xs" c="dimmed">
-                    Week starting {week.weekStart}
+                    Shipment date {week.shipmentDate || week.weekStart}
                   </Text>
                 </Stack>
 
@@ -512,8 +442,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                 </Group>
               </Group>
 
-              {/* PAID ORDERS FOR THIS WEEK */}
-              {eligibleOrders.length > 0 ? (
+              {shipmentOrders.length > 0 ? (
                 <Table
                   withTableBorder
                   withColumnBorders
@@ -538,14 +467,13 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {eligibleOrders.map((o) => (
+                    {shipmentOrders.map((o) => (
                       <Fragment key={o.id}>
-                        {/* MAIN ORDER ROW */}
                         <Table.Tr
                           style={{ cursor: "pointer" }}
                           onClick={() => handleToggleOrder(o)}
                         >
-                          <Table.Td>{o.code}</Table.Td>
+                          <Table.Td>{o.code || o.id}</Table.Td>
                           <Table.Td>
                             <Badge color="green" variant="filled" size="xs">
                               {String(o.state || "").toUpperCase()}
@@ -576,7 +504,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                           </Table.Td>
                         </Table.Tr>
 
-                        {/* EXPANDED CARDS ROW */}
                         {expandedOrderId === o.id && (
                           <Table.Tr>
                             <Table.Td
@@ -588,14 +515,12 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                               }}
                             >
                               <Box p="md">
-                                {/* Loading state for this order */}
                                 {!itemsByOrder[o.id] && loadingItems && (
                                   <Group justify="center" p="lg">
                                     <Loader size="sm" />
                                   </Group>
                                 )}
 
-                                {/* No line items at all */}
                                 {itemsByOrder[o.id] &&
                                   itemsByOrder[o.id].length === 0 &&
                                   !loadingItems && (
@@ -604,9 +529,9 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                     </Text>
                                   )}
 
-                                {/* Line items – apply picked/unpicked filter */}
                                 {itemsByOrder[o.id] &&
-                                  itemsByOrder[o.id].length > 0 && (() => {
+                                  itemsByOrder[o.id].length > 0 &&
+                                  (() => {
                                     const allItems = itemsByOrder[o.id]!;
                                     const visibleItems = filterItems(
                                       allItems,
@@ -619,8 +544,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                     ) {
                                       return (
                                         <Text c="dimmed" ta="center">
-                                          No line items match the current
-                                          filter.
+                                          No line items match the current filter.
                                         </Text>
                                       );
                                     }
@@ -628,15 +552,16 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                     return (
                                       <Stack gap="md">
                                         {visibleItems.map((it) => {
-  const isPicked = !!it.picked;
-  const originalIndex = allItems.indexOf(it);
-  const key = `${o.id}-${it.cardTraderId ?? `idx-${originalIndex}`}`;
-  const isBusy =
-    pickingKey ===
-    `${o.id}-${
-      it.cardTraderId ??
-      `idx-${originalIndex}`
-    }`;
+                                          const isPicked = !!it.picked;
+                                          const originalIndex = allItems.indexOf(it);
+                                          const key = `${o.id}-$${
+                                            it.cardTraderId ?? `idx-${originalIndex}`
+                                          }`;
+                                          const isBusy =
+                                            pickingKey ===
+                                            `${o.id}-$${
+                                              it.cardTraderId ?? `idx-${originalIndex}`
+                                            }`;
 
                                           return (
                                             <Group
@@ -645,10 +570,9 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                               wrap="nowrap"
                                               style={{
                                                 padding: "8px 12px",
-                                                borderBottom:
-                                                  "1px solid #333",
+                                                borderBottom: "1px solid #333",
                                                 background: isPicked
-                                                  ? "rgba(46, 204, 113, 0.12)" // soft green
+                                                  ? "rgba(46, 204, 113, 0.12)"
                                                   : "transparent",
                                                 borderLeft: isPicked
                                                   ? "3px solid #2ecc71"
@@ -656,7 +580,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                 borderRadius: 4,
                                               }}
                                             >
-                                              {/* IMAGE + BUTTON */}
                                               <Box
                                                 style={{
                                                   display: "flex",
@@ -678,12 +601,9 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                   onError={(e) => {
                                                     (
                                                       e.target as HTMLImageElement
-                                                    ).src =
-                                                      "/card-placeholder.png";
+                                                    ).src = "/card-placeholder.png";
                                                   }}
-                                                  alt={
-                                                    it.name || "Card image"
-                                                  }
+                                                  alt={it.name || "Card image"}
                                                 />
                                                 <Button
                                                   mt={6}
@@ -701,7 +621,6 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                 </Button>
                                               </Box>
 
-                                              {/* DETAILS + PICKED BUTTON */}
                                               <Box
                                                 style={{
                                                   flex: 1,
@@ -716,42 +635,64 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                   wrap="nowrap"
                                                 >
                                                   <Box style={{ flex: 1 }}>
-  <Text fw={500}>
-    {it.name || "No name"}
-  </Text>
-  <Text size="xs" c="dimmed">
-    {it.set_name || "Unknown set"}
-  </Text>
+                                                    <Text fw={500}>
+                                                      {it.name || "No name"}
+                                                    </Text>
+                                                    <Text size="xs" c="dimmed">
+                                                      {it.set_name || "Unknown set"}
+                                                    </Text>
 
-  <Group gap={6} mt={6}>
-    <Badge
-      size="sm"
-      color={it.isFoil ? "yellow" : "gray"}
-      variant={it.isFoil ? "filled" : "light"}
-    >
-      {it.isFoil ? "Foil" : "Non-Foil"}
-    </Badge>
+                                                    <Group gap={6} mt={6}>
+                                                      <Badge
+                                                        size="sm"
+                                                        color={
+                                                          it.isFoil
+                                                            ? "yellow"
+                                                            : "gray"
+                                                        }
+                                                        variant={
+                                                          it.isFoil
+                                                            ? "filled"
+                                                            : "light"
+                                                        }
+                                                      >
+                                                        {it.isFoil
+                                                          ? "Foil"
+                                                          : "Non-Foil"}
+                                                      </Badge>
 
-    {it.condition && (
-      <Badge size="sm" variant="light" color="blue">
-        {it.condition}
-      </Badge>
-    )}
-  </Group>
+                                                      {it.condition && (
+                                                        <Badge
+                                                          size="sm"
+                                                          variant="light"
+                                                          color="blue"
+                                                        >
+                                                          {it.condition}
+                                                        </Badge>
+                                                      )}
+                                                    </Group>
 
-  <Text size="sm" mt={4}>
-    Qty: {it.quantity ?? "?"}
-  </Text>
+                                                    <Text size="sm" mt={4}>
+                                                      Qty: {it.quantity ?? "?"}
+                                                    </Text>
 
-  {/* BIN LOCATIONS */}
-  <Group gap={6} mt={6}>
-    {(it.binLocations || []).map((b, i) => (
-      <Badge key={i} color="yellow">
-        {b.bin ?? "?"} / Row {b.row ?? "?"} (x{b.quantity ?? "?"})
-      </Badge>
-    ))}
-  </Group>
-</Box>
+                                                    <Group gap={6} mt={6}>
+                                                      {(it.binLocations || []).map(
+                                                        (b, i) => (
+                                                          <Badge
+                                                            key={i}
+                                                            color="yellow"
+                                                          >
+                                                            {b.bin ?? "?"} / Row{
+                                                              " "
+                                                            }
+                                                            {b.row ?? "?"} (x
+                                                            {b.quantity ?? "?"})
+                                                          </Badge>
+                                                        )
+                                                      )}
+                                                    </Group>
+                                                  </Box>
 
                                                   <Group
                                                     gap="xs"
@@ -767,9 +708,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                           : "outline"
                                                       }
                                                       color={
-                                                        isPicked
-                                                          ? "green"
-                                                          : "gray"
+                                                        isPicked ? "green" : "gray"
                                                       }
                                                       loading={isBusy}
                                                       disabled={isBusy}
@@ -794,11 +733,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                                                   </Group>
                                                 </Group>
 
-                                                {/* Mark up to here (uses original index) */}
-                                                <Group
-                                                  justify="flex-end"
-                                                  mt={4}
-                                                >
+                                                <Group justify="flex-end" mt={4}>
                                                   <Button
                                                     size="xs"
                                                     variant="subtle"
@@ -830,7 +765,7 @@ const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
                 </Table>
               ) : (
                 <Text size="sm" c="dimmed">
-                  No HUB_PENDING orders in this shipment.
+                  No paid CT Zero shipment orders in this shipment.
                 </Text>
               )}
             </Paper>

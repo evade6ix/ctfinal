@@ -57,16 +57,21 @@ router.get("/", async (req, res) => {
     });
 
     const output = liveShipmentOrders.map((o) => {
-      const paidAt = o.paid_at || o.paidAt || null;
+      const shipmentDateRaw =
+        o.paidAt ||
+        o.paid_at ||
+        o.createdAt ||
+        o.created_at ||
+        null;
+
+      const shipmentDate = shipmentDateRaw
+        ? new Date(shipmentDateRaw).toISOString().substring(0, 10)
+        : "live";
 
       return {
         shipmentId: String(o.id),
-        weekStart: paidAt
-          ? new Date(paidAt).toISOString().substring(0, 10)
-          : "live",
-        shipmentDate: paidAt
-          ? new Date(paidAt).toISOString().substring(0, 10)
-          : "live",
+        weekStart: shipmentDate,
+        shipmentDate,
         totalOrders: 1,
         totalValueCents: Number(o.sellerTotalCents || 0),
         totalValue: (Number(o.sellerTotalCents || 0) / 100).toFixed(2),

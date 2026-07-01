@@ -2,9 +2,42 @@
 import mongoose from "mongoose";
 import { InventoryItem } from "../models/InventoryItem.js";
 
+function buildInventoryLookup(staged) {
+  const cardTraderId = Number(staged?.cardTraderId);
+
+  if (Number.isFinite(cardTraderId) && cardTraderId > 0) {
+    return { cardTraderId };
+  }
+
+  const blueprintId = Number(staged?.blueprintId);
+
+  if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
+    throw new Error(
+      "applyStagedToInventory: staged.cardTraderId or staged.blueprintId is required"
+    );
+  }
+
+  return {
+    $and: [
+      {
+        $or: [
+          { cardTraderId: { $exists: false } },
+          { cardTraderId: null },
+          { cardTraderId: 0 },
+        ],
+      },
+      { blueprintId },
+      { setCode: staged.setCode || "" },
+      { game: staged.game || "" },
+      { condition: staged.condition || "NM" },
+      { isFoil: !!staged.isFoil },
+    ],
+  };
+}
+
 export async function applyStagedToInventory(staged, binId, row) {
-  if (!staged || !staged.cardTraderId) {
-    throw new Error("applyStagedToInventory: staged.cardTraderId is required");
+  if (!staged) {
+    throw new Error("applyStagedToInventory: staged item is required");
   }
 
   if (!binId) {
@@ -24,13 +57,16 @@ export async function applyStagedToInventory(staged, binId, row) {
   }
 
   const binObjectId = new mongoose.Types.ObjectId(binId);
+  const lookup = buildInventoryLookup(staged);
 
-  let inv = await InventoryItem.findOne({ cardTraderId: staged.cardTraderId });
+  let inv = await InventoryItem.findOne(lookup);
 
   if (!inv) {
-    inv = await InventoryItem.create({
-      cardTraderId: staged.cardTraderId,
-      blueprintId: staged.blueprintId || null,
+    const cardTraderId = Number(staged.cardTraderId);
+    const blueprintId = Number(staged.blueprintId);
+
+    const createPayload = {
+      blueprintId: Number.isFinite(blueprintId) ? blueprintId : null,
       name: staged.name || "",
       setCode: staged.setCode || "",
       game: staged.game || "",
@@ -48,13 +84,25 @@ export async function applyStagedToInventory(staged, binId, row) {
           quantity: qty,
         },
       ],
-    });
+    };
 
+    if (Number.isFinite(cardTraderId) && cardTraderId > 0) {
+      createPayload.cardTraderId = cardTraderId;
+    }
+
+    inv = await InventoryItem.create(createPayload);
     return inv;
   }
 
-  if (staged.blueprintId) {
-    inv.blueprintId = staged.blueprintId;
+  const stagedCardTraderId = Number(staged.cardTraderId);
+  const stagedBlueprintId = Number(staged.blueprintId);
+
+  if (Number.isFinite(stagedCardTraderId) && stagedCardTraderId > 0) {
+    inv.cardTraderId = stagedCardTraderId;
+  }
+
+  if (Number.isFinite(stagedBlueprintId) && stagedBlueprintId > 0) {
+    inv.blueprintId = stagedBlueprintId;
   }
 
   inv.name = staged.name || inv.name || "";

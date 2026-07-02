@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";import {
+import React, { useEffect, useMemo, useState } from "react";
+import {
   Badge,
   Box,
   Button,
@@ -12,9 +13,8 @@ import React, { useEffect, useState } from "react";import {
   Title,
   SegmentedControl,
 } from "@mantine/core";
-import { IconArrowsDownUp } from "@tabler/icons-react";
+import { IconArrowsDownUp, IconTrash } from "@tabler/icons-react";
 
-// 👇 adjust the path if your file is in a different folder
 import { OrdersDailyView } from "./OrdersDailyView";
 
 type Buyer = {
@@ -30,15 +30,11 @@ type OrderSummary = {
   orderAs?: string;
   buyer?: Buyer | null;
   size?: number;
-
   createdAt?: string | null;
-
   sellerTotalCents?: number | null;
   sellerTotalCurrency?: string | null;
   formattedTotal?: string | null;
-
-  date?: string; // extracted YYYY-MM-DD
-
+  date?: string;
   allocated?: boolean;
 };
 
@@ -52,21 +48,17 @@ type OrderItem = {
   quantity?: number;
   image_url?: string;
   imageUrl?: string;
-
   setCode?: string | null;
   set_name?: string;
   collectorNumber?: string | null;
   scryfallId?: string | null;
   tcgplayerSkuId?: string | null;
   manapoolCustomExternalId?: string | null;
-
   binLocations?: { bin: string; row: number; quantity: number }[];
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
-
   source?: "manapool" | "cardtrader";
-
   isFoil?: boolean;
   condition?: string | null;
 };
@@ -79,7 +71,6 @@ type OrderAllocation = {
   marketplaceOrderItemId?: string | null;
   cardTraderId?: number | null;
   manapoolInventoryId?: string | null;
-
   inventoryItem?: {
     _id?: string;
     name?: string | null;
@@ -107,14 +98,11 @@ type OrderAllocation = {
       customExternalId?: string | null;
     };
   } | null;
-
   setCode?: string | null;
   scryfallId?: string | null;
   tcgplayerSkuId?: string | null;
   manapoolCustomExternalId?: string | null;
-
   requestedQuantity?: number;
-
   fulfilledQuantity?: number;
   unfilled?: number;
   name?: string;
@@ -131,6 +119,8 @@ type OrderAllocation = {
     quantity?: number;
   }[];
 };
+
+const HIDDEN_REFUNDED_STORAGE_KEY = "manapool_hidden_refunded_order_ids_v1";
 
 function getManaPoolLineRawId(it: any, index: number) {
   return (
@@ -167,6 +157,60 @@ function getManaPoolInventoryId(it: any) {
   return raw == null ? null : String(raw);
 }
 
+function normalizeStatus(value?: string | null) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isShippedManaPoolStatus(value?: string | null) {
+  const status = normalizeStatus(value);
+  return ["shipped", "sent", "fulfilled"].includes(status);
+}
+
+function isRefundedManaPoolStatus(value?: string | null) {
+  const status = normalizeStatus(value);
+  return status.includes("refund");
+}
+
+function getStatusColor(value?: string | null) {
+  const status = normalizeStatus(value);
+
+  if (status === "hub_pending") return "yellow";
+  if (status === "sent" || status === "shipped" || status === "fulfilled") return "green";
+  if (status.includes("refund")) return "red";
+  if (status === "cancelled" || status === "canceled") return "red";
+
+  return "gray";
+}
+
+function loadHiddenRefundedOrderIds() {
+  if (typeof window === "undefined") return new Set<string>();
+
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_REFUNDED_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch (err) {
+    console.error("Failed to load hidden refunded ManaPool order ids", err);
+    return new Set<string>();
+  }
+}
+
+function persistHiddenRefundedOrderIds(next: Set<string>) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(
+      HIDDEN_REFUNDED_STORAGE_KEY,
+      JSON.stringify([...next])
+    );
+  } catch (err) {
+    console.error("Failed to save hidden refunded ManaPool order ids", err);
+  }
+}
+
 function allocationToBinLocations(allocation?: OrderAllocation | null) {
   if (
     !allocation ||
@@ -200,370 +244,356 @@ export function OrdersView() {
     Record<string | number, OrderItem[]>
   >({});
 
-  // 👇 toggle between raw Orders list and Daily sales
   const [viewMode, setViewMode] = useState<"orders" | "daily">("orders");
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  // ✅ NEW: map of orderId -> { cardTraderId -> picked }
   const [pickedMap, setPickedMap] = useState<
-    Record<string | number, Record<number, boolean>>
+    Record<string | number, Record<string | number, boolean>>
   >({});
 
- const fetchOrders = async () => {
-  try {
-    setLoading(true);
-    setError(null);
+  const [hiddenRefundedOrderIds, setHiddenRefundedOrderIds] = useState<Set<string>>(
+    () => loadHiddenRefundedOrderIds()
+  );
 
-    const res = await fetch("/api/manapool/orders?limit=50");
-    if (!res.ok) throw new Error("Failed to load Mana Pool orders");
+  const visibleOrders = useMemo(
+    () => orders.filter((o) => !hiddenRefundedOrderIds.has(String(o.id))),
+    [orders, hiddenRefundedOrderIds]
+  );
 
-    const payload = await res.json();
+  const fetchOrders = async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-    const manaPoolOrders = payload?.data?.orders || [];
+      const res = await fetch("/api/manapool/orders?limit=50");
+      if (!res.ok) throw new Error("Failed to load Mana Pool orders");
 
-    const normalizedOrders: OrderSummary[] = manaPoolOrders.map((o: any) => {
-  const items =
-    Array.isArray(o.items)
-      ? o.items
-      : Array.isArray(o.line_items)
-      ? o.line_items
-      : Array.isArray(o.order_items)
-      ? o.order_items
-      : Array.isArray(o.lines)
-      ? o.lines
-      : [];
+      const payload = await res.json();
+      const manaPoolOrders = payload?.data?.orders || [];
 
-  const buyerName =
-    o.buyer?.username ||
-    o.buyer?.name ||
-    o.customer?.name ||
-    o.customer_name ||
-    o.shipping_address?.name ||
-    o.shippingAddress?.name ||
-    "Unknown";
+      const normalizedOrders: OrderSummary[] = manaPoolOrders
+        .map((o: any) => {
+          const items = Array.isArray(o.items)
+            ? o.items
+            : Array.isArray(o.line_items)
+            ? o.line_items
+            : Array.isArray(o.order_items)
+            ? o.order_items
+            : Array.isArray(o.lines)
+            ? o.lines
+            : [];
 
-  const buyerCountry =
-    o.buyer?.country ||
-    o.customer?.country ||
-    o.shipping_address?.country ||
-    o.shippingAddress?.country ||
-    "";
+          const buyerName =
+            o.buyer?.username ||
+            o.buyer?.name ||
+            o.customer?.name ||
+            o.customer_name ||
+            o.shipping_address?.name ||
+            o.shippingAddress?.name ||
+            "Unknown";
 
-  const status =
-    o.latest_fulfillment_status ||
-    o.fulfillment_status ||
-    o.status ||
-    o.state ||
-    (Array.isArray(o.fulfillments) && o.fulfillments.length > 0
-      ? "fulfilled"
-      : "unfulfilled");
+          const buyerCountry =
+            o.buyer?.country ||
+            o.customer?.country ||
+            o.shipping_address?.country ||
+            o.shippingAddress?.country ||
+            "";
 
-  return {
-    id: o.id,
-    code: o.label || o.number || o.code || String(o.id),
-    state: status,
-    orderAs: "Mana Pool",
-    buyer: {
-      username: buyerName,
-      country: buyerCountry,
-    },
-    size:
-      o.items_count ||
-      o.line_items_count ||
-      o.quantity ||
-      items.reduce(
-        (sum: number, item: any) => sum + Number(item.quantity || item.qty || 1),
-        0
-      ),
-    createdAt: o.created_at || o.createdAt || o.inserted_at || null,
-    sellerTotalCents:
-      o.seller_total_cents ||
-      o.payment?.total_cents ||
-      o.total_cents ||
-      o.subtotal_cents ||
-      null,
-    sellerTotalCurrency:
-      o.seller_total_currency ||
-      o.currency ||
-      "USD",
-    formattedTotal:
-      o.formatted_total ||
-      o.total_formatted ||
-      null,
-    allocated: false,
+          const status =
+            o.latest_fulfillment_status ||
+            o.fulfillment_status ||
+            o.status ||
+            o.state ||
+            (Array.isArray(o.fulfillments) && o.fulfillments.length > 0
+              ? "fulfilled"
+              : "unfulfilled");
+
+          return {
+            id: o.id,
+            code: o.label || o.number || o.code || String(o.id),
+            state: status,
+            orderAs: "Mana Pool",
+            buyer: {
+              username: buyerName,
+              country: buyerCountry,
+            },
+            size:
+              o.items_count ||
+              o.line_items_count ||
+              o.quantity ||
+              items.reduce(
+                (sum: number, item: any) =>
+                  sum + Number(item.quantity || item.qty || 1),
+                0
+              ),
+            createdAt: o.created_at || o.createdAt || o.inserted_at || null,
+            sellerTotalCents:
+              o.seller_total_cents ||
+              o.payment?.total_cents ||
+              o.total_cents ||
+              o.subtotal_cents ||
+              null,
+            sellerTotalCurrency: o.seller_total_currency || o.currency || "USD",
+            formattedTotal: o.formatted_total || o.total_formatted || null,
+            allocated: false,
+          };
+        })
+        .filter((o: OrderSummary) => !isShippedManaPoolStatus(o.state));
+
+      setOrders(normalizedOrders);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to load Mana Pool orders");
+    } finally {
+      setLoading(false);
+    }
   };
-});
 
-    setOrders(normalizedOrders);
-  } catch (err: any) {
-    console.error(err);
-    setError(err.message || "Failed to load Mana Pool orders");
-  } finally {
-    setLoading(false);
-  }
-};
   useEffect(() => {
     fetchOrders();
   }, []);
 
   const loadItems = async (orderId: string | number) => {
-  if (itemsByOrder[orderId]) {
-    return;
-  }
+    if (itemsByOrder[orderId]) return;
 
-  try {
-    const [orderRes, allocationRes] = await Promise.all([
-      fetch(`/api/manapool/orders/${encodeURIComponent(String(orderId))}`),
-      fetch(
-        `/api/order-allocations/by-order/${encodeURIComponent(
-          String(orderId)
-        )}?source=manapool`
-      ),
-    ]);
+    try {
+      const [orderRes, allocationRes] = await Promise.all([
+        fetch(`/api/manapool/orders/${encodeURIComponent(String(orderId))}`),
+        fetch(
+          `/api/order-allocations/by-order/${encodeURIComponent(
+            String(orderId)
+          )}?source=manapool`
+        ),
+      ]);
 
-    if (!orderRes.ok) {
-      throw new Error(`Failed to load Mana Pool order items: ${orderRes.status}`);
-    }
+      if (!orderRes.ok) {
+        throw new Error(`Failed to load Mana Pool order items: ${orderRes.status}`);
+      }
 
-    const payload = await orderRes.json();
-    const order = payload?.data?.order || payload?.data || payload;
+      const payload = await orderRes.json();
+      const order = payload?.data?.order || payload?.data || payload;
 
-    const rawItems =
-      order?.items ||
-      order?.line_items ||
-      order?.order_items ||
-      order?.lines ||
-      order?.order_lines ||
-      order?.seller_order_items ||
-      order?.articles ||
-      [];
+      const rawItems =
+        order?.items ||
+        order?.line_items ||
+        order?.order_items ||
+        order?.lines ||
+        order?.order_lines ||
+        order?.seller_order_items ||
+        order?.articles ||
+        [];
 
       const rawItemsArray = Array.isArray(rawItems) ? rawItems : [];
 
-const detailedBuyerName =
-  order?.buyer?.username ||
-  order?.buyer?.name ||
-  order?.customer?.name ||
-  order?.customer_name ||
-  order?.shipping_address?.name ||
-  order?.shippingAddress?.name ||
-  "Unknown";
+      const detailedBuyerName =
+        order?.buyer?.username ||
+        order?.buyer?.name ||
+        order?.customer?.name ||
+        order?.customer_name ||
+        order?.shipping_address?.name ||
+        order?.shippingAddress?.name ||
+        "Unknown";
 
-const detailedBuyerCountry =
-  order?.buyer?.country ||
-  order?.customer?.country ||
-  order?.shipping_address?.country ||
-  order?.shippingAddress?.country ||
-  "";
+      const detailedBuyerCountry =
+        order?.buyer?.country ||
+        order?.customer?.country ||
+        order?.shipping_address?.country ||
+        order?.shippingAddress?.country ||
+        "";
 
-const detailedItemCount = rawItemsArray.reduce(
-  (sum: number, item: any) => sum + Number(item.quantity || item.qty || 1),
-  0
-);
+      const detailedItemCount = rawItemsArray.reduce(
+        (sum: number, item: any) => sum + Number(item.quantity || item.qty || 1),
+        0
+      );
 
-setOrders((prev) =>
-  prev.map((existingOrder) =>
-    String(existingOrder.id) === String(orderId)
-      ? {
-          ...existingOrder,
-          buyer: {
-            username: detailedBuyerName,
-            country: detailedBuyerCountry,
-          },
-          size: detailedItemCount,
-          sellerTotalCents:
-            order?.payment?.total_cents ||
-            order?.total_cents ||
-            existingOrder.sellerTotalCents ||
-            null,
-          sellerTotalCurrency:
-            order?.seller_total_currency ||
-            order?.currency ||
-            existingOrder.sellerTotalCurrency ||
-            "USD",
+      setOrders((prev) =>
+        prev.map((existingOrder) =>
+          String(existingOrder.id) === String(orderId)
+            ? {
+                ...existingOrder,
+                buyer: {
+                  username: detailedBuyerName,
+                  country: detailedBuyerCountry,
+                },
+                size: detailedItemCount,
+                sellerTotalCents:
+                  order?.payment?.total_cents ||
+                  order?.total_cents ||
+                  existingOrder.sellerTotalCents ||
+                  null,
+                sellerTotalCurrency:
+                  order?.seller_total_currency ||
+                  order?.currency ||
+                  existingOrder.sellerTotalCurrency ||
+                  "USD",
+              }
+            : existingOrder
+        )
+      );
+
+      const allocations: OrderAllocation[] = allocationRes.ok
+        ? await allocationRes.json()
+        : [];
+
+      const allocationByOrderItemId = new Map<number, OrderAllocation>();
+      const allocationByMarketplaceId = new Map<string, OrderAllocation>();
+      const allocationByManaPoolInventoryId = new Map<string, OrderAllocation>();
+
+      for (const allocation of allocations || []) {
+        if (typeof allocation.orderItemId === "number") {
+          allocationByOrderItemId.set(allocation.orderItemId, allocation);
         }
-      : existingOrder
-  )
-);
 
-    const allocations: OrderAllocation[] = allocationRes.ok
-      ? await allocationRes.json()
-      : [];
+        if (allocation.marketplaceOrderItemId) {
+          allocationByMarketplaceId.set(
+            String(allocation.marketplaceOrderItemId),
+            allocation
+          );
+        }
 
-    const allocationByOrderItemId = new Map<number, OrderAllocation>();
-    const allocationByMarketplaceId = new Map<string, OrderAllocation>();
-    const allocationByManaPoolInventoryId = new Map<string, OrderAllocation>();
-
-    for (const allocation of allocations || []) {
-      if (typeof allocation.orderItemId === "number") {
-        allocationByOrderItemId.set(allocation.orderItemId, allocation);
+        if (allocation.manapoolInventoryId) {
+          allocationByManaPoolInventoryId.set(
+            String(allocation.manapoolInventoryId),
+            allocation
+          );
+        }
       }
 
-      if (allocation.marketplaceOrderItemId) {
-        allocationByMarketplaceId.set(
-          String(allocation.marketplaceOrderItemId),
-          allocation
-        );
-      }
+      const normalizedItems: OrderItem[] = rawItemsArray.map((it: any, index: number) => {
+        const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
+        const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
+        const manapoolInventoryId = getManaPoolInventoryId(it);
 
-      if (allocation.manapoolInventoryId) {
-        allocationByManaPoolInventoryId.set(
-          String(allocation.manapoolInventoryId),
-          allocation
-        );
-      }
+        const allocation =
+          allocationByOrderItemId.get(numericOrderItemId) ||
+          allocationByMarketplaceId.get(marketplaceOrderItemId) ||
+          (manapoolInventoryId
+            ? allocationByManaPoolInventoryId.get(manapoolInventoryId)
+            : null) ||
+          null;
+
+        const manaPoolSingle = it?.product?.single || {};
+
+        const setCodeRaw =
+          allocation?.setCode ||
+          allocation?.inventoryItem?.setCode ||
+          manaPoolSingle?.set ||
+          it.setCode ||
+          it.set_code ||
+          it.expansion_code ||
+          null;
+
+        const setCode =
+          typeof setCodeRaw === "string" && setCodeRaw.trim()
+            ? setCodeRaw.trim().toUpperCase()
+            : null;
+
+        const collectorNumber =
+          manaPoolSingle?.number || it.collector_number || it.number || null;
+
+        const setDisplay = setCode
+          ? collectorNumber
+            ? `${setCode} #${collectorNumber}`
+            : setCode
+          : it.set_name ||
+            it.setName ||
+            it.expansion_name ||
+            it.product?.set_name ||
+            it.product?.expansion_name ||
+            null;
+
+        return {
+          id: numericOrderItemId,
+          marketplaceOrderItemId,
+          source: "manapool",
+          cardTraderId: allocation?.cardTraderId ?? null,
+          manapoolInventoryId,
+          name:
+            allocation?.name ||
+            it.name ||
+            it.product_name ||
+            it.card_name ||
+            it.title ||
+            it.product?.name ||
+            "No name",
+          quantity:
+            it.quantity || it.qty || it.count || allocation?.requestedQuantity || 1,
+          imageUrl:
+            it.image_url ||
+            it.imageUrl ||
+            it.product?.image_url ||
+            it.product?.imageUrl ||
+            null,
+          setCode,
+          set_name: setDisplay || "Unknown set",
+          collectorNumber,
+          scryfallId:
+            allocation?.scryfallId ||
+            allocation?.inventoryItem?.manapool?.scryfallId ||
+            allocation?.inventoryItem?.identifiers?.scryfallId ||
+            manaPoolSingle?.scryfall_id ||
+            null,
+          tcgplayerSkuId:
+            allocation?.tcgplayerSkuId ||
+            allocation?.inventoryItem?.identifiers?.tcgplayerSkuId ||
+            allocation?.inventoryItem?.manapool?.tcgplayerSku ||
+            String(it.tcgsku || it.product?.tcgplayer_sku || "") ||
+            null,
+          manapoolCustomExternalId:
+            allocation?.manapoolCustomExternalId ||
+            allocation?.inventoryItem?.manapool?.customExternalId ||
+            it.custom_external_id ||
+            null,
+          condition:
+            allocation?.condition ??
+            it.condition ??
+            it.condition_name ??
+            it.product?.condition ??
+            null,
+          isFoil:
+            allocation?.isFoil ??
+            Boolean(
+              it.is_foil ||
+                it.isFoil ||
+                it.foil ||
+                it.finish === "foil" ||
+                it.product?.is_foil ||
+                it.product?.foil
+            ),
+          picked: !!allocation?.picked,
+          pickedAt: allocation?.pickedAt || null,
+          pickedBy: allocation?.pickedBy || null,
+          binLocations: allocationToBinLocations(allocation),
+        };
+      });
+
+      setItemsByOrder((prev) => ({
+        ...prev,
+        [orderId]: normalizedItems,
+      }));
+    } catch (err) {
+      console.error("Failed loading Mana Pool order items", err);
+      setItemsByOrder((prev) => ({
+        ...prev,
+        [orderId]: [],
+      }));
     }
-
-    const normalizedItems: OrderItem[] = rawItemsArray.map((it: any, index: number) => {
-  const numericOrderItemId = getManaPoolNumericOrderItemId(it, index);
-  const marketplaceOrderItemId = getManaPoolMarketplaceOrderItemId(it, index);
-  const manapoolInventoryId = getManaPoolInventoryId(it);
-
-  const allocation =
-    allocationByOrderItemId.get(numericOrderItemId) ||
-    allocationByMarketplaceId.get(marketplaceOrderItemId) ||
-    (manapoolInventoryId
-      ? allocationByManaPoolInventoryId.get(manapoolInventoryId)
-      : null) ||
-    null;
-
-  const manaPoolSingle = it?.product?.single || {};
-
-  const setCodeRaw =
-    allocation?.setCode ||
-    allocation?.inventoryItem?.setCode ||
-    manaPoolSingle?.set ||
-    it.setCode ||
-    it.set_code ||
-    it.expansion_code ||
-    null;
-
-  const setCode =
-    typeof setCodeRaw === "string" && setCodeRaw.trim()
-      ? setCodeRaw.trim().toUpperCase()
-      : null;
-
-  const collectorNumber =
-    manaPoolSingle?.number ||
-    it.collector_number ||
-    it.number ||
-    null;
-
-  const setDisplay = setCode
-    ? collectorNumber
-      ? `${setCode} #${collectorNumber}`
-      : setCode
-    : it.set_name ||
-      it.setName ||
-      it.expansion_name ||
-      it.product?.set_name ||
-      it.product?.expansion_name ||
-      null;
-
-  return {
-        id: numericOrderItemId,
-        marketplaceOrderItemId,
-        source: "manapool",
-        cardTraderId: allocation?.cardTraderId ?? null,
-        manapoolInventoryId,
-
-        name:
-          allocation?.name ||
-          it.name ||
-          it.product_name ||
-          it.card_name ||
-          it.title ||
-          it.product?.name ||
-          "No name",
-
-        quantity:
-          it.quantity ||
-          it.qty ||
-          it.count ||
-          allocation?.requestedQuantity ||
-          1,
-
-        imageUrl:
-          it.image_url ||
-          it.imageUrl ||
-          it.product?.image_url ||
-          it.product?.imageUrl ||
-          null,
-
-        setCode,
-set_name: setDisplay || "Unknown set",
-collectorNumber,
-scryfallId:
-  allocation?.scryfallId ||
-  allocation?.inventoryItem?.manapool?.scryfallId ||
-  allocation?.inventoryItem?.identifiers?.scryfallId ||
-  manaPoolSingle?.scryfall_id ||
-  null,
-tcgplayerSkuId:
-  allocation?.tcgplayerSkuId ||
-  allocation?.inventoryItem?.identifiers?.tcgplayerSkuId ||
-  allocation?.inventoryItem?.manapool?.tcgplayerSku ||
-  String(it.tcgsku || it.product?.tcgplayer_sku || "") ||
-  null,
-manapoolCustomExternalId:
-  allocation?.manapoolCustomExternalId ||
-  allocation?.inventoryItem?.manapool?.customExternalId ||
-  it.custom_external_id ||
-  null,
-
-        condition:
-          allocation?.condition ??
-          it.condition ??
-          it.condition_name ??
-          it.product?.condition ??
-          null,
-
-        isFoil:
-          allocation?.isFoil ??
-          Boolean(
-            it.is_foil ||
-              it.isFoil ||
-              it.foil ||
-              it.finish === "foil" ||
-              it.product?.is_foil ||
-              it.product?.foil
-          ),
-
-        picked: !!allocation?.picked,
-        pickedAt: allocation?.pickedAt || null,
-        pickedBy: allocation?.pickedBy || null,
-
-        binLocations: allocationToBinLocations(allocation),
-      };
-    });
-
-    setItemsByOrder((prev) => ({
-      ...prev,
-      [orderId]: normalizedItems,
-    }));
-  } catch (err) {
-    console.error("Failed loading Mana Pool order items", err);
-    setItemsByOrder((prev) => ({
-      ...prev,
-      [orderId]: [],
-    }));
-  }
-};
+  };
 
   const getCardImageSrc = (it: OrderItem) => {
-  const dbImage = it.imageUrl || it.image_url;
+    const dbImage = it.imageUrl || it.image_url;
 
-  if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
-    return dbImage;
-  }
+    if (dbImage && typeof dbImage === "string" && dbImage.startsWith("http")) {
+      return dbImage;
+    }
 
-  return "/card-placeholder.png";
-};
+    return "/card-placeholder.png";
+  };
 
-const toggle = (id: string | number) => {
+  const toggle = (id: string | number) => {
     const willExpand = expanded !== id;
     setExpanded(willExpand ? id : null);
     if (willExpand) loadItems(id);
@@ -571,8 +601,7 @@ const toggle = (id: string | number) => {
 
   const getBuyerDisplay = (buyer?: Buyer | null) => {
     if (!buyer) return "Unknown";
-    if (buyer.username && buyer.country)
-      return `${buyer.username} (${buyer.country})`;
+    if (buyer.username && buyer.country) return `${buyer.username} (${buyer.country})`;
     return buyer.username || buyer.country || "Unknown";
   };
 
@@ -587,10 +616,9 @@ const toggle = (id: string | number) => {
 
   const formatTotal = (o: OrderSummary) => {
     if (o.formattedTotal) return o.formattedTotal;
-    if (o.sellerTotalCents && o.sellerTotalCurrency)
-      return `${(o.sellerTotalCents / 100).toFixed(2)} ${
-        o.sellerTotalCurrency
-      }`;
+    if (o.sellerTotalCents && o.sellerTotalCurrency) {
+      return `${(o.sellerTotalCents / 100).toFixed(2)} ${o.sellerTotalCurrency}`;
+    }
     return "-";
   };
 
@@ -605,12 +633,12 @@ const toggle = (id: string | number) => {
       if (aHasBin && bHasBin) {
         const aLoc = a.binLocations![0];
         const bLoc = b.binLocations![0];
-
         const aBin = (aLoc.bin || "").toString();
         const bBin = (bLoc.bin || "").toString();
 
-        if (aBin !== bBin)
+        if (aBin !== bBin) {
           return aBin.localeCompare(bBin, undefined, { numeric: true });
+        }
 
         const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
         const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
@@ -619,8 +647,7 @@ const toggle = (id: string | number) => {
 
       const aSet = (a.set_name || "").toString();
       const bSet = (b.set_name || "").toString();
-      if (aSet !== bSet)
-        return aSet.localeCompare(bSet, undefined, { numeric: true });
+      if (aSet !== bSet) return aSet.localeCompare(bSet, undefined, { numeric: true });
 
       const aName = (a.name || "").toString();
       const bName = (b.name || "").toString();
@@ -628,46 +655,58 @@ const toggle = (id: string | number) => {
     });
   };
 
-  const handleSyncOrders = async () => {
-  const confirmed = window.confirm(
-    "This will run the safe order sync. It can still deduct inventory for NEW exact CardTrader ID matches. Make sure ORDER_SYNC_CUTOFF is set in server/.env before continuing. Continue?"
-  );
+  const handleHideRefundedOrder = (orderId: string | number) => {
+    const next = new Set(hiddenRefundedOrderIds);
+    next.add(String(orderId));
+    setHiddenRefundedOrderIds(next);
+    persistHiddenRefundedOrderIds(next);
 
-  if (!confirmed) return;
-
-  try {
-    setSyncing(true);
-    setSyncMessage(null);
-    setSyncError(null);
-
-    const res = await fetch("/api/orders/sync", { method: "POST" });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to sync orders");
+    if (expanded === orderId) {
+      setExpanded(null);
     }
+  };
 
-    setSyncMessage(
-      `Safe sync complete. Eligible: ${data.eligibleOrders ?? 0}, reconciled: ${
-        data.reconciled ?? 0
-      }, failed: ${data.failed ?? 0}. Cutoff: ${data.cutoff ?? "none"}`
+  const handleClearHiddenRefundedOrders = () => {
+    const next = new Set<string>();
+    setHiddenRefundedOrderIds(next);
+    persistHiddenRefundedOrderIds(next);
+  };
+
+  const handleSyncOrders = async () => {
+    const confirmed = window.confirm(
+      "This will run the safe order sync. It can still deduct inventory for NEW exact CardTrader ID matches. Make sure ORDER_SYNC_CUTOFF is set in server/.env before continuing. Continue?"
     );
 
-    fetchOrders();
-  } catch (err: any) {
-    console.error("Sync failed:", err);
-    setSyncError(err.message || "Failed to sync orders");
-  } finally {
-    setSyncing(false);
-  }
-};
+    if (!confirmed) return;
 
-  // ✅ Toggle picked state for ONE card line
-  const handleTogglePicked = async (
-    orderId: string | number,
-    item: OrderItem
-  ) => {
+    try {
+      setSyncing(true);
+      setSyncMessage(null);
+      setSyncError(null);
+
+      const res = await fetch("/api/orders/sync", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to sync orders");
+      }
+
+      setSyncMessage(
+        `Safe sync complete. Eligible: ${data.eligibleOrders ?? 0}, reconciled: ${
+          data.reconciled ?? 0
+        }, failed: ${data.failed ?? 0}. Cutoff: ${data.cutoff ?? "none"}`
+      );
+
+      fetchOrders();
+    } catch (err: any) {
+      console.error("Sync failed:", err);
+      setSyncError(err.message || "Failed to sync orders");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleTogglePicked = async (orderId: string | number, item: OrderItem) => {
     const ctId = item.cardTraderId;
     if (typeof ctId === "undefined" || ctId === null) {
       console.warn("No cardTraderId on item, cannot toggle picked");
@@ -675,10 +714,9 @@ const toggle = (id: string | number) => {
     }
 
     const pickedKey = typeof item.id === "number" ? item.id : ctId;
-
-const currentForOrder = pickedMap[orderId] || {};
-const currentlyPicked = !!currentForOrder[pickedKey];
-const nextPicked = !currentlyPicked;
+    const currentForOrder = pickedMap[orderId] || {};
+    const currentlyPicked = !!currentForOrder[pickedKey];
+    const nextPicked = !currentlyPicked;
 
     try {
       const endpoint = nextPicked ? "pick" : "unpick";
@@ -687,11 +725,12 @@ const nextPicked = !currentlyPicked;
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-  orderId,
-  orderItemId: item.id,
-  cardTraderId: ctId,
-  pickedBy: "manual", // you can wire your username later
-}),
+          orderId,
+          orderItemId: item.id,
+          cardTraderId: ctId,
+          pickedBy: "manual",
+          source: "manapool",
+        }),
       });
 
       if (!res.ok) {
@@ -704,7 +743,6 @@ const nextPicked = !currentlyPicked;
         return;
       }
 
-      // If backend succeeded, update local map
       setPickedMap((prev) => {
         const existing = prev[orderId] || {};
         return {
@@ -720,14 +758,14 @@ const nextPicked = !currentlyPicked;
     }
   };
 
-    return (
+  return (
     <Stack gap="md">
       <Group justify="space-between">
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-  Mana Pool seller orders. Expand an order to view line items, or switch to Daily Sales.
-</Text>
+            Mana Pool seller orders. Shipped orders are hidden automatically. Refunded orders stay visible until you hide them from this view.
+          </Text>
         </div>
 
         <Group gap="xs">
@@ -744,6 +782,12 @@ const nextPicked = !currentlyPicked;
           <Button onClick={fetchOrders} loading={loading} variant="light">
             Refresh
           </Button>
+
+          {hiddenRefundedOrderIds.size > 0 && (
+            <Button size="sm" variant="subtle" onClick={handleClearHiddenRefundedOrders}>
+              Show hidden refunds ({hiddenRefundedOrderIds.size})
+            </Button>
+          )}
 
           <Button
             leftSection={<IconArrowsDownUp size={16} />}
@@ -792,7 +836,7 @@ const nextPicked = !currentlyPicked;
               </Table.Thead>
 
               <Table.Tbody>
-                {!loading && orders.length === 0 && (
+                {!loading && visibleOrders.length === 0 && (
                   <Table.Tr>
                     <Table.Td colSpan={7} ta="center">
                       <Text c="dimmed">No Mana Pool orders found.</Text>
@@ -800,164 +844,175 @@ const nextPicked = !currentlyPicked;
                   </Table.Tr>
                 )}
 
-                {orders.map((o) => (
-                  <React.Fragment key={o.id}>
-                    <Table.Tr
-                      onClick={() => toggle(o.id)}
-                      style={{ cursor: "pointer" }}
-                    >
-                      <Table.Td>
-                        <Group gap={6}>
-                          <Text fw={500}>{o.code}</Text>
-                          {o.allocated && (
-                            <Badge size="xs" color="yellow" variant="filled">
-                              Allocated
-                            </Badge>
-                          )}
-                        </Group>
-                        <Text size="xs" c="dimmed">
-                          as {o.orderAs}
-                        </Text>
-                      </Table.Td>
+                {visibleOrders.map((o) => {
+                  const refunded = isRefundedManaPoolStatus(o.state);
 
-                      <Table.Td>
-                        <Badge
-                          color={
-                            o.state?.toUpperCase() === "HUB_PENDING"
-                              ? "yellow"
-                              : o.state === "sent"
-                              ? "green"
-                              : "gray"
-                          }
-                        >
-                          {o.state}
-                        </Badge>
-                      </Table.Td>
+                  return (
+                    <React.Fragment key={o.id}>
+                      <Table.Tr
+                        onClick={() => toggle(o.id)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <Table.Td>
+                          <Group gap={6}>
+                            <Text fw={500}>{o.code}</Text>
+                            {o.allocated && (
+                              <Badge size="xs" color="yellow" variant="filled">
+                                Allocated
+                              </Badge>
+                            )}
+                          </Group>
+                          <Text size="xs" c="dimmed">
+                            as {o.orderAs}
+                          </Text>
+                        </Table.Td>
 
-                      <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
-                      <Table.Td>{o.size ?? "-"}</Table.Td>
-                      <Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
-                      <Table.Td>{formatTotal(o)}</Table.Td>
+                        <Table.Td>
+                          <Badge color={getStatusColor(o.state)}>{o.state}</Badge>
+                        </Table.Td>
 
-                      <Table.Td>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggle(o.id);
-                          }}
-                        >
-                          View
-                        </Button>
-                      </Table.Td>
-                    </Table.Tr>
+                        <Table.Td>{getBuyerDisplay(o.buyer)}</Table.Td>
+                        <Table.Td>{o.size ?? "-"}</Table.Td>
+                        <Table.Td>{formatLocalDate(o.createdAt)}</Table.Td>
+                        <Table.Td>{formatTotal(o)}</Table.Td>
 
-                    {expanded === o.id && (
-                      <Table.Tr>
-                        <Table.Td colSpan={7} style={{ background: "#111", padding: 0 }}>
-                          <Box p="md">
-                            {!itemsByOrder[o.id] && (
-                              <Group justify="center" p="lg">
-                                <Loader size="sm" color="yellow" />
-                              </Group>
+                        <Table.Td>
+                          <Group gap={6} justify="flex-end" wrap="nowrap">
+                            {refunded && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="red"
+                                leftSection={<IconTrash size={14} />}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleHideRefundedOrder(o.id);
+                                }}
+                              >
+                                Hide refund
+                              </Button>
                             )}
 
-                            {itemsByOrder[o.id]?.length === 0 && (
-                              <Text c="dimmed" ta="center">
-                                No line items found.
-                              </Text>
-                            )}
-
-                            {!!itemsByOrder[o.id]?.length && (
-                              <Stack gap="md">
-                                {sortOrderItems(itemsByOrder[o.id]).map((it, idx) => {
-                                  const ctId =
-                                    typeof it.cardTraderId === "number"
-                                      ? it.cardTraderId
-                                      : undefined;
-
-                                  const pickedKey =
-                                    typeof it.id === "number" ? it.id : ctId;
-
-                                  const isPicked =
-                                    pickedKey !== undefined &&
-                                    !!pickedMap[o.id]?.[pickedKey];
-
-                                  return (
-                                    <Group key={idx} align="flex-start" wrap="nowrap">
-                                      <img
-                                        src={getCardImageSrc(it)}
-                                        width={50}
-                                        height={70}
-                                        style={{ objectFit: "cover", borderRadius: 4 }}
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).src =
-                                            "/card-placeholder.png";
-                                        }}
-                                      />
-
-                                      <Box style={{ flex: 1 }}>
-                                        <Text fw={500}>{it.name || "No name"}</Text>
-                                        <Text size="xs" c="dimmed">
-  {it.set_name || it.setCode || "Unknown set"}
-</Text>
-
-                                        <Group gap={6} mt={6}>
-                                          <Badge
-                                            size="sm"
-                                            color={it.isFoil ? "yellow" : "gray"}
-                                            variant={it.isFoil ? "filled" : "light"}
-                                          >
-                                            {it.isFoil ? "Foil" : "Non-Foil"}
-                                          </Badge>
-
-                                          {it.condition && (
-                                            <Badge size="sm" variant="light" color="blue">
-                                              {it.condition}
-                                            </Badge>
-                                          )}
-                                        </Group>
-
-                                        <Text size="sm" mt={4}>
-                                          Qty: {it.quantity ?? "?"}
-                                        </Text>
-
-                                        <Group gap={6} mt={6}>
-                                          {it.binLocations?.length ? (
-                                            it.binLocations.map((b, i) => (
-                                              <Badge key={i} color="yellow">
-                                                {b.bin ?? "?"} / Row {b.row ?? "?"} (x
-                                                {b.quantity ?? "?"})
-                                              </Badge>
-                                            ))
-                                          ) : (
-                                            <Badge color="red" variant="light">
-                                              Unassigned
-                                            </Badge>
-                                          )}
-                                        </Group>
-                                      </Box>
-
-                                      <Button
-                                        size="xs"
-                                        variant={isPicked ? "filled" : "outline"}
-                                        color={isPicked ? "green" : "gray"}
-                                        onClick={() => handleTogglePicked(o.id, it)}
-                                      >
-                                        {isPicked ? "Picked" : "Mark picked"}
-                                      </Button>
-                                    </Group>
-                                  );
-                                })}
-                              </Stack>
-                            )}
-                          </Box>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggle(o.id);
+                              }}
+                            >
+                              View
+                            </Button>
+                          </Group>
                         </Table.Td>
                       </Table.Tr>
-                    )}
-                  </React.Fragment>
-                ))}
+
+                      {expanded === o.id && (
+                        <Table.Tr>
+                          <Table.Td colSpan={7} style={{ background: "#111", padding: 0 }}>
+                            <Box p="md">
+                              {!itemsByOrder[o.id] && (
+                                <Group justify="center" p="lg">
+                                  <Loader size="sm" color="yellow" />
+                                </Group>
+                              )}
+
+                              {itemsByOrder[o.id]?.length === 0 && (
+                                <Text c="dimmed" ta="center">
+                                  No line items found.
+                                </Text>
+                              )}
+
+                              {!!itemsByOrder[o.id]?.length && (
+                                <Stack gap="md">
+                                  {sortOrderItems(itemsByOrder[o.id]).map((it, idx) => {
+                                    const ctId =
+                                      typeof it.cardTraderId === "number"
+                                        ? it.cardTraderId
+                                        : undefined;
+
+                                    const pickedKey =
+                                      typeof it.id === "number" ? it.id : ctId;
+
+                                    const isPicked =
+                                      pickedKey !== undefined &&
+                                      !!pickedMap[o.id]?.[pickedKey];
+
+                                    return (
+                                      <Group key={idx} align="flex-start" wrap="nowrap">
+                                        <img
+                                          src={getCardImageSrc(it)}
+                                          width={50}
+                                          height={70}
+                                          style={{ objectFit: "cover", borderRadius: 4 }}
+                                          onError={(e) => {
+                                            (e.target as HTMLImageElement).src =
+                                              "/card-placeholder.png";
+                                          }}
+                                        />
+
+                                        <Box style={{ flex: 1 }}>
+                                          <Text fw={500}>{it.name || "No name"}</Text>
+                                          <Text size="xs" c="dimmed">
+                                            {it.set_name || it.setCode || "Unknown set"}
+                                          </Text>
+
+                                          <Group gap={6} mt={6}>
+                                            <Badge
+                                              size="sm"
+                                              color={it.isFoil ? "yellow" : "gray"}
+                                              variant={it.isFoil ? "filled" : "light"}
+                                            >
+                                              {it.isFoil ? "Foil" : "Non-Foil"}
+                                            </Badge>
+
+                                            {it.condition && (
+                                              <Badge size="sm" variant="light" color="blue">
+                                                {it.condition}
+                                              </Badge>
+                                            )}
+                                          </Group>
+
+                                          <Text size="sm" mt={4}>
+                                            Qty: {it.quantity ?? "?"}
+                                          </Text>
+
+                                          <Group gap={6} mt={6}>
+                                            {it.binLocations?.length ? (
+                                              it.binLocations.map((b, i) => (
+                                                <Badge key={i} color="yellow">
+                                                  {b.bin ?? "?"} / Row {b.row ?? "?"} (x
+                                                  {b.quantity ?? "?"})
+                                                </Badge>
+                                              ))
+                                            ) : (
+                                              <Badge color="red" variant="light">
+                                                Unassigned
+                                              </Badge>
+                                            )}
+                                          </Group>
+                                        </Box>
+
+                                        <Button
+                                          size="xs"
+                                          variant={isPicked ? "filled" : "outline"}
+                                          color={isPicked ? "green" : "gray"}
+                                          onClick={() => handleTogglePicked(o.id, it)}
+                                        >
+                                          {isPicked ? "Picked" : "Mark picked"}
+                                        </Button>
+                                      </Group>
+                                    );
+                                  })}
+                                </Stack>
+                              )}
+                            </Box>
+                          </Table.Td>
+                        </Table.Tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           </ScrollArea>

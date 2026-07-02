@@ -41,10 +41,10 @@ function normalizeStagedItem(raw, gameId) {
   const blueprintId = Number(raw.blueprintId);
   const qty = Number(raw.quantity);
 
-  // Keep existing CatalogSearchView behavior: staged price is submitted as cents.
-  // Example: 1000 means $10.00.
-  const rawPriceCents = raw.price == null ? null : Number(raw.price);
-  const price = Number.isFinite(rawPriceCents) ? rawPriceCents / 100 : null;
+  // Dashboard NumberInput is real dollars now.
+  // $0.04 means 4 cents, $1.21 means $1.21.
+  const rawPriceDollars = raw.price == null ? null : Number(raw.price);
+  const price = Number.isFinite(rawPriceDollars) ? rawPriceDollars : null;
 
   if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
     return { ok: false, reason: "Invalid blueprintId", raw };

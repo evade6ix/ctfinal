@@ -124,6 +124,87 @@ async function fetchAllSellerOrders() {
   return allOrders;
 }
 
+function imageUrlForInventoryItem(inv) {
+  if (inv?.imageUrl) return inv.imageUrl;
+  if (inv?.blueprintId) {
+    return `https://img.cardtrader.com/blueprints/${inv.blueprintId}/front.jpg`;
+  }
+  return null;
+}
+
+async function fetchInventoryMapForOrders(mappedOrders) {
+  const ctIds = [
+    ...new Set(
+      mappedOrders
+        .flatMap((order) => order.items || [])
+        .map((item) => Number(item.cardTraderId))
+        .filter((x) => Number.isFinite(x))
+    ),
+  ];
+
+  if (ctIds.length === 0) return new Map();
+
+  try {
+    const invItems = await InventoryItem.find({
+      cardTraderId: { $in: ctIds },
+    }).lean();
+
+    const invMap = new Map();
+    for (const inv of invItems) {
+      invMap.set(Number(inv.cardTraderId), inv);
+    }
+
+    return invMap;
+  } catch (err) {
+    console.error(
+      "⚠️ /api/orders inventory decoration skipped because Mongo lookup failed:",
+      err?.message || err
+    );
+    return new Map();
+  }
+}
+
+async function fetchAllocationFlagsForOrders(mappedOrders) {
+  const orderIdStrings = mappedOrders.map((o) => String(o.id));
+
+  if (orderIdStrings.length === 0) {
+    return {
+      allocatedSet: new Set(),
+      manualReviewSet: new Set(),
+    };
+  }
+
+  try {
+    const allocations = await OrderAllocation.find(
+      { orderId: { $in: orderIdStrings } },
+      "orderId status"
+    ).lean();
+
+    return {
+      allocatedSet: new Set(
+        allocations
+          .filter((a) => a.status === "allocated")
+          .map((a) => String(a.orderId))
+      ),
+      manualReviewSet: new Set(
+        allocations
+          .filter((a) => a.status === "manual_review")
+          .map((a) => String(a.orderId))
+      ),
+    };
+  } catch (err) {
+    console.error(
+      "⚠️ /api/orders allocation flags skipped because Mongo lookup failed:",
+      err?.message || err
+    );
+
+    return {
+      allocatedSet: new Set(),
+      manualReviewSet: new Set(),
+    };
+  }
+}
+
 export async function reconcileCardTraderOrderById(orderId) {
   const orderIdStr = String(orderId);
   const url = `http://localhost:${
@@ -308,80 +389,48 @@ router.get("/", async (req, res) => {
 
     console.log("Fetched", allOrders.length, "orders");
 
-    const mapped = await Promise.all(
-      allOrders.map(async (o) => {
-        const rawCreated = getOrderCreatedAt(o);
-        const rawItems = getRawItems(o);
+    const mappedBase = allOrders.map((o) => {
+      const rawCreated = getOrderCreatedAt(o);
+      const rawItems = getRawItems(o);
 
-        const baseItems = rawItems.map((it) => ({
-          id: it.id,
-          cardTraderId: it.product_id ?? null,
-          name: it.name || "Unknown item",
-          quantity: it.quantity ?? 0,
-        }));
+      const baseItems = rawItems.map((it) => ({
+        id: it.id,
+        cardTraderId: it.product_id ?? null,
+        name: it.name || "Unknown item",
+        quantity: it.quantity ?? 0,
+      }));
 
-        const ctIds = baseItems
-          .map((i) => Number(i.cardTraderId))
-          .filter((x) => Number.isFinite(x));
+      return {
+        id: o.id,
+        code: o.code,
+        state: o.state,
+        orderAs: o.order_as,
+        buyer: o.buyer || null,
+        size: o.size,
+        createdAt: rawCreated,
+        sellerTotalCents: o.seller_total?.cents ?? null,
+        sellerTotalCurrency: o.seller_total?.currency ?? null,
+        formattedTotal: o.formatted_total ?? null,
+        viaCardTraderZero: !!o.via_cardtrader_zero,
+        items: baseItems,
+      };
+    });
 
-        const invItems = await InventoryItem.find({
-          cardTraderId: { $in: ctIds },
-        }).lean();
+    const invMap = await fetchInventoryMapForOrders(mappedBase);
 
-        const invMap = new Map();
-        for (const inv of invItems) {
-          invMap.set(Number(inv.cardTraderId), inv);
-        }
-
-        const finalItems = baseItems.map((it) => {
-          const inv = invMap.get(Number(it.cardTraderId));
-          let imageUrl = null;
-
-          if (inv?.imageUrl) {
-            imageUrl = inv.imageUrl;
-          } else if (inv?.blueprintId) {
-            imageUrl = `https://img.cardtrader.com/blueprints/${inv.blueprintId}/front.jpg`;
-          }
-
-          return {
-            ...it,
-            imageUrl,
-          };
-        });
-
+    const mapped = mappedBase.map((order) => ({
+      ...order,
+      items: (order.items || []).map((it) => {
+        const inv = invMap.get(Number(it.cardTraderId));
         return {
-          id: o.id,
-          code: o.code,
-          state: o.state,
-          orderAs: o.order_as,
-          buyer: o.buyer || null,
-          size: o.size,
-          createdAt: rawCreated,
-          sellerTotalCents: o.seller_total?.cents ?? null,
-          sellerTotalCurrency: o.seller_total?.currency ?? null,
-          formattedTotal: o.formatted_total ?? null,
-          viaCardTraderZero: !!o.via_cardtrader_zero,
-          items: finalItems,
+          ...it,
+          imageUrl: imageUrlForInventoryItem(inv),
         };
-      })
-    );
+      }),
+    }));
 
-    const orderIdStrings = mapped.map((o) => String(o.id));
-    const allocations = await OrderAllocation.find(
-      { orderId: { $in: orderIdStrings } },
-      "orderId status"
-    ).lean();
-
-    const allocatedSet = new Set(
-      allocations
-        .filter((a) => a.status === "allocated")
-        .map((a) => a.orderId)
-    );
-
-    const manualReviewSet = new Set(
-      allocations
-        .filter((a) => a.status === "manual_review")
-        .map((a) => a.orderId)
+    const { allocatedSet, manualReviewSet } = await fetchAllocationFlagsForOrders(
+      mapped
     );
 
     const mappedWithFlags = mapped.map((o) => ({

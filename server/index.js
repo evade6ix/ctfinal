@@ -10,6 +10,7 @@ import binsRouter from "./routes/bins.js";
 import inventoryRouter from "./routes/inventory.js";
 import cardtraderRouter from "./routes/cardtrader.js";
 import cardtraderWebhooksRouter from "./routes/cardtraderWebhooks.js";
+import cardtraderRepriceRouter from "./routes/cardtraderReprice.js";
 import ordersRouter from "./routes/orders.js";
 import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
@@ -46,6 +47,7 @@ app.get("/health", (req, res) => {
 app.use("/api/bins", binsRouter);
 app.use("/api/inventory", inventoryRouter);
 app.use("/api/ct/webhooks", cardtraderWebhooksRouter);
+app.use("/api/ct/reprice", cardtraderRepriceRouter);
 app.use("/api/ct", cardtraderRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/order-articles", orderArticlesRouter);
@@ -95,6 +97,7 @@ async function start() {
       console.log("✅ Mana Pool routes mounted at /api/manapool");
       console.log("✅ Staged push routes mounted at /api/staged-push");
       console.log("✅ CardTrader webhook routes mounted at /api/ct/webhooks");
+      console.log("✅ CardTrader repricer routes mounted at /api/ct/reprice");
 
       startOrderAutoSyncWorker({
         port: PORT,

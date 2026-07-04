@@ -32,12 +32,25 @@ let expansionsCache = { at: 0, data: [] };
 const EXPANSIONS_TTL_MS = 60 * 60 * 1000;
 
 function normalizeCondition(value) {
-  return (value || "").toString().trim().toUpperCase();
+  const raw = String(value || "").trim().toLowerCase();
+
+  if (raw === "m" || raw === "mint") return "Mint";
+  if (raw === "nm" || raw === "near mint") return "Near Mint";
+  if (raw === "lp" || raw === "lightly played" || raw === "slightly played") {
+    return "Slightly Played";
+  }
+  if (raw === "mp" || raw === "moderately played") return "Moderately Played";
+  if (raw === "p" || raw === "played") return "Played";
+  if (raw === "hp" || raw === "heavily played") return "Heavily Played";
+  if (raw === "poor") return "Poor";
+
+  return "Near Mint";
 }
 
 function listingCondition(listing) {
   return normalizeCondition(
-    listing?.properties?.condition ||
+    listing?.properties_hash?.condition ||
+      listing?.properties?.condition ||
       listing?.condition ||
       listing?.card_condition ||
       listing?.grading ||
@@ -45,10 +58,29 @@ function listingCondition(listing) {
   );
 }
 
-async function getMarketPriceForBlueprint(client, blueprintId) {
-  const key = String(blueprintId);
-  const now = Date.now();
+function normalizeUserType(value) {
+  return String(value || "").trim().toLowerCase();
+}
 
+async function getMarketPriceForBlueprint(
+  client,
+  blueprintId,
+  { condition = "Near Mint", foil = false, language = "en" } = {}
+) {
+  const normalizedCondition = normalizeCondition(condition);
+  const normalizedLanguage = String(language || "en").trim().toLowerCase();
+  const normalizedFoil = foil === true || String(foil).toLowerCase() === "true";
+
+  const key = [
+    blueprintId,
+    normalizedLanguage,
+    normalizedCondition,
+    normalizedFoil ? "foil" : "nonfoil",
+    "ctzero",
+    "professional",
+  ].join(":");
+
+  const now = Date.now();
   const cached = marketCache.get(key);
   if (cached && now - cached.at < MARKET_TTL_MS) {
     return cached.value;
@@ -58,47 +90,52 @@ async function getMarketPriceForBlueprint(client, blueprintId) {
     const resp = await client.get("/marketplace/products", {
       params: {
         blueprint_id: blueprintId,
-        language: "en",
+        language: normalizedLanguage,
+        foil: normalizedFoil,
       },
     });
 
     const data = resp.data || {};
-    const arr = Array.isArray(data[String(blueprintId)])
-      ? data[String(blueprintId)]
-      : [];
+    const arr = Array.isArray(data[String(blueprintId)]) ? data[String(blueprintId)] : [];
 
-    if (!arr.length) {
-      marketCache.set(key, { at: now, value: null });
-      return null;
-    }
+    const eligible = arr.filter((listing) => {
+      if (!listing || listing?.price?.cents == null) return false;
 
-    const zeroOnly = arr.filter((x) => {
-      if (!x || !x.price || x.price.cents == null) return false;
-      return x.user?.can_sell_via_hub === true;
+      const isCardTraderZero = listing.user?.can_sell_via_hub === true;
+      const isProfessional = normalizeUserType(listing.user?.user_type) === "professional";
+      const conditionMatches = listingCondition(listing) === normalizedCondition;
+
+      return (
+        isCardTraderZero &&
+        isProfessional &&
+        conditionMatches &&
+        listing.on_vacation !== true &&
+        listing.graded !== true
+      );
     });
 
-    if (!zeroOnly.length) {
+    if (!eligible.length) {
       marketCache.set(key, { at: now, value: null });
       return null;
     }
 
-    const cheapest = zeroOnly
+    const cheapest = eligible
       .slice()
       .sort((a, b) => Number(a.price.cents) - Number(b.price.cents))[0];
 
-    const value =
-      cheapest && cheapest.price && cheapest.price.cents != null
-        ? Number(cheapest.price.cents) / 100
-        : null;
+    const value = cheapest?.price?.cents != null ? Number(cheapest.price.cents) / 100 : null;
 
     marketCache.set(key, { at: now, value });
     return value;
   } catch (err) {
-    console.error(
-      "Error fetching ZERO EN market for blueprint",
+    console.error("Error fetching filtered CardTrader market", {
       blueprintId,
-      err?.response?.data || err.message
-    );
+      condition: normalizedCondition,
+      foil: normalizedFoil,
+      language: normalizedLanguage,
+      error: err?.response?.data || err.message,
+    });
+
     marketCache.set(key, { at: now, value: null });
     return null;
   }
@@ -190,9 +227,7 @@ async function fetchAndCacheSet(client, gameId, expansionId, expansion) {
 }
 
 async function getCachedSetOrFetch(client, gameId, expansionId, expansionsById, force = false) {
-  const existing = !force
-    ? await CatalogSetCache.findOne({ expansionId }).lean()
-    : null;
+  const existing = !force ? await CatalogSetCache.findOne({ expansionId }).lean() : null;
 
   if (isFreshCache(existing)) {
     return { doc: existing, cached: true };
@@ -202,9 +237,6 @@ async function getCachedSetOrFetch(client, gameId, expansionId, expansionsById, 
   return fetchAndCacheSet(client, gameId, expansionId, expansion);
 }
 
-// =======================
-// GET /api/catalog/games
-// =======================
 router.get("/games", async (req, res) => {
   try {
     const client = ct();
@@ -233,9 +265,6 @@ router.get("/games", async (req, res) => {
   }
 });
 
-// =======================
-// GET /api/catalog/sets?gameId=1
-// =======================
 router.get("/sets", async (req, res) => {
   const gameId = Number(req.query.gameId);
 
@@ -276,10 +305,7 @@ router.get("/sets", async (req, res) => {
 
     res.json({ sets });
   } catch (err) {
-    console.error(
-      "Error fetching sets from CardTrader:",
-      err.response?.data || err.message
-    );
+    console.error("Error fetching sets from CardTrader:", err.response?.data || err.message);
     res.status(500).json({
       error: "Failed to fetch sets from CardTrader",
       details: err.response?.data || err.message,
@@ -287,11 +313,6 @@ router.get("/sets", async (req, res) => {
   }
 });
 
-// =======================
-// POST /api/catalog/cache-set
-// Body: { gameId, setId, force }
-// Fetches one set into Mongo so searches can read locally.
-// =======================
 router.post("/cache-set", async (req, res) => {
   let { gameId, setId, force } = req.body || {};
   gameId = Number(gameId);
@@ -331,10 +352,7 @@ router.post("/cache-set", async (req, res) => {
       elapsedMs: Date.now() - startedAt,
     });
   } catch (err) {
-    console.error(
-      `Error caching catalog set ${expansionId}:`,
-      err.response?.data || err.message
-    );
+    console.error(`Error caching catalog set ${expansionId}:`, err.response?.data || err.message);
 
     res.status(500).json({
       error: "Failed to cache catalog set",
@@ -343,13 +361,46 @@ router.post("/cache-set", async (req, res) => {
   }
 });
 
-// =======================
-// POST /api/catalog/search
-// Body: { gameId, setIds: [expansionId], query, page, pageSize }
-// Uses Mongo set cache first. Missing/expired sets are fetched and cached.
-// =======================
+router.get("/market", async (req, res) => {
+  try {
+    const client = ct();
+    const blueprintId = Number(req.query.blueprint_id || req.query.blueprintId);
+
+    if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
+      return res.status(400).json({ error: "Missing or invalid blueprint_id" });
+    }
+
+    const condition = normalizeCondition(req.query.condition || "Near Mint");
+    const foil = String(req.query.foil || "false").toLowerCase() === "true";
+    const language = String(req.query.language || "en").toLowerCase();
+
+    const market = await getMarketPriceForBlueprint(client, blueprintId, {
+      condition,
+      foil,
+      language,
+    });
+
+    res.json({
+      blueprintId,
+      condition,
+      foil,
+      language,
+      market,
+      filters: {
+        cardTraderZero: true,
+        sellerType: "professional",
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: "Failed to fetch market price",
+      details: err?.response?.data || err.message,
+    });
+  }
+});
+
 router.post("/search", async (req, res) => {
-  let { gameId, setIds, query, page, pageSize } = req.body || {};
+  let { gameId, setIds, query, page, pageSize, condition, foil, language } = req.body || {};
 
   gameId = Number(gameId);
   page = Number(page) || 1;
@@ -357,15 +408,16 @@ router.post("/search", async (req, res) => {
   if (!Array.isArray(setIds)) setIds = [];
   const normalizedSetIds = [...new Set(setIds.map(Number).filter(Boolean))];
   const trimmedQuery = (query || "").toString().trim().toLowerCase();
+  const normalizedCondition = normalizeCondition(condition || "Near Mint");
+  const normalizedFoil = foil === true || String(foil || "false").toLowerCase() === "true";
+  const normalizedLanguage = String(language || "en").toLowerCase();
 
   if (!gameId) {
     return res.status(400).json({ error: "Missing or invalid gameId" });
   }
 
   if (normalizedSetIds.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "You must provide at least one set (expansion) id" });
+    return res.status(400).json({ error: "You must provide at least one set (expansion) id" });
   }
 
   try {
@@ -377,12 +429,7 @@ router.post("/search", async (req, res) => {
 
     for (const expansionId of normalizedSetIds) {
       try {
-        const { doc, cached } = await getCachedSetOrFetch(
-          client,
-          gameId,
-          expansionId,
-          expansionsById
-        );
+        const { doc, cached } = await getCachedSetOrFetch(client, gameId, expansionId, expansionsById);
 
         if (doc?.blueprints?.length) {
           allBlueprints.push(...doc.blueprints);
@@ -409,9 +456,7 @@ router.post("/search", async (req, res) => {
     let filtered = allBlueprints.filter((bp) => Number(bp.gameId) === gameId);
 
     if (trimmedQuery) {
-      filtered = filtered.filter(
-        (bp) => bp.name && bp.name.toLowerCase().includes(trimmedQuery)
-      );
+      filtered = filtered.filter((bp) => bp.name && bp.name.toLowerCase().includes(trimmedQuery));
     }
 
     filtered.sort((a, b) => {
@@ -428,11 +473,20 @@ router.post("/search", async (req, res) => {
 
     const items = await Promise.all(
       slice.map(async (bp) => {
-        const market = await getMarketPriceForBlueprint(client, bp.id);
+        const market = await getMarketPriceForBlueprint(client, bp.id, {
+          condition: normalizedCondition,
+          foil: normalizedFoil,
+          language: normalizedLanguage,
+        });
 
         return {
           ...bp,
           market,
+          marketCondition: normalizedCondition,
+          marketFoil: normalizedFoil,
+          marketLanguage: normalizedLanguage,
+          marketSellerType: "professional",
+          marketCardTraderZero: true,
           rarity: bp.rarity || bp.version || null,
           edition: null,
           finish: null,
@@ -446,12 +500,16 @@ router.post("/search", async (req, res) => {
       page,
       pageSize,
       cache: cacheReport,
+      marketFilters: {
+        condition: normalizedCondition,
+        foil: normalizedFoil,
+        language: normalizedLanguage,
+        cardTraderZero: true,
+        sellerType: "professional",
+      },
     });
   } catch (err) {
-    console.error(
-      "Error searching CardTrader catalog:",
-      err.response?.data || err.message
-    );
+    console.error("Error searching CardTrader catalog:", err.response?.data || err.message);
     res.status(500).json({
       error: "Failed to search CardTrader catalog",
       details: err.response?.data || err.message,

@@ -72,7 +72,7 @@ function App() {
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <Title order={3}>CardTrader Listing Tool</Title>
             <Badge ml="xs" size="sm" variant="light" radius="sm" style={{ textTransform: "none" }}>
-              Dashboard: Catalog Search
+              Repricer Live
             </Badge>
           </Group>
           <Text size="sm" c="dimmed">{sectionTitle}</Text>

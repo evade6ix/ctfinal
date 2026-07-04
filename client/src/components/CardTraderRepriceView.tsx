@@ -39,12 +39,11 @@ type RepriceResponse = {
   totalLiveProducts: number;
   activeProducts: number;
   changed: number;
-  skipped: number;
+  skipped: unknown[];
   attemptedUpdates?: number;
   updated?: number;
   failed?: number;
   changes: RepriceChange[];
-  skipped?: any[];
   results?: RepriceChange[];
   error?: string;
   details?: unknown;
@@ -76,6 +75,8 @@ export function CardTraderRepriceView() {
       : 100
     : 0;
 
+  const skippedCount = Array.isArray(preview?.skipped) ? preview.skipped.length : 0;
+
   async function runPreview() {
     try {
       setLoadingPreview(true);
@@ -95,8 +96,8 @@ export function CardTraderRepriceView() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Preview failed");
       setPreview(data);
-    } catch (err: any) {
-      setError(err.message || "Preview failed");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Preview failed");
     } finally {
       setLoadingPreview(false);
     }
@@ -129,8 +130,8 @@ export function CardTraderRepriceView() {
       if (!res.ok) throw new Error(data?.error || "Apply failed");
       setApplyResult(data);
       setPreview(data);
-    } catch (err: any) {
-      setError(err.message || "Apply failed");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Apply failed");
     } finally {
       setLoadingApply(false);
     }
@@ -224,7 +225,7 @@ export function CardTraderRepriceView() {
               <Badge variant="light">Live CT products: {preview.totalLiveProducts}</Badge>
               <Badge variant="light">Active scanned: {preview.scanned}</Badge>
               <Badge color="green" variant="light">Changes: {preview.changed}</Badge>
-              <Badge color="gray" variant="light">Skipped: {preview.skipped}</Badge>
+              <Badge color="gray" variant="light">Skipped: {skippedCount}</Badge>
               {applyResult && <Badge color="blue" variant="light">Updated: {applyResult.updated ?? 0}</Badge>}
               {applyResult && <Badge color="red" variant="light">Failed: {applyResult.failed ?? 0}</Badge>}
             </Group>

@@ -119,7 +119,7 @@ function productPriceCents(product) {
   return value == null ? null : Math.round(Number(value));
 }
 
-async function fetchOwnProducts(api, { maxPages = 80, perPage = 100 } = {}) {
+async function fetchOwnProducts(api, { maxPages = 80, perPage = 50 } = {}) {
   const all = [];
 
   for (let page = 1; page <= maxPages; page += 1) {

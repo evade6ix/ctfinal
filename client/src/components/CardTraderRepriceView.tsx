@@ -25,7 +25,10 @@ type RepriceChange = {
   foil?: boolean;
   quantity?: number;
   currentPrice?: number;
+  currentListedPrice?: number;
+  cardTraderFee?: number;
   marketPrice?: number;
+  targetListedPrice?: number;
   targetPrice?: number;
   marketSeller?: string | null;
   ok?: boolean;
@@ -107,7 +110,7 @@ export function CardTraderRepriceView() {
     if (!preview?.changes?.length) return;
 
     const yes = window.confirm(
-      `This will update ${applyLimit || preview.changes.length} CardTrader price(s). This does NOT touch ManaPool. Continue?`
+      `This will update ${applyLimit || preview.changes.length} CardTrader base price(s). CardTrader will calculate the listed price/fee layer. This does NOT touch ManaPool. Continue?`
     );
     if (!yes) return;
 
@@ -142,12 +145,12 @@ export function CardTraderRepriceView() {
       <Box>
         <Title order={2}>CardTrader Repricing</Title>
         <Text c="dimmed" size="sm" mt={4}>
-          Preview and update CardTrader prices only. Uses English CT Zero eligible listings, matching condition and foil, then beats the cheapest eligible listing by $0.01.
+          Preview and update CardTrader base prices only. The target is to keep your live CardTrader listed price $0.01 below the cheapest eligible live listing.
         </Text>
       </Box>
 
       <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
-        This tool does not update ManaPool. Always preview first. Marketplace lookups are processed slowly to avoid CardTrader rate limits.
+        This tool does not update ManaPool. It uses CardTrader live listing prices and infers your CardTrader fee layer from your live listing when available.
       </Alert>
 
       <Paper withBorder radius="md" p="md">
@@ -179,7 +182,7 @@ export function CardTraderRepriceView() {
           />
 
           <NumberInput
-            label="Minimum price"
+            label="Minimum base price"
             description="In cents. Default 1"
             value={minPriceCents ?? undefined}
             onChange={(value) => {
@@ -188,7 +191,7 @@ export function CardTraderRepriceView() {
             }}
             min={1}
             step={1}
-            w={150}
+            w={170}
           />
 
           <Button leftSection={<IconRefresh size={16} />} loading={loadingPreview} disabled={loadingApply} onClick={runPreview}>
@@ -234,7 +237,7 @@ export function CardTraderRepriceView() {
           <Progress value={progressValue} radius="xl" mb="sm" />
 
           <Text size="xs" c="dimmed" mb="md">
-            Logic: English • CT Zero eligible • seller type blank/pro-compatible • same condition • same foil status • excludes your own listings • target = eligible market - $0.01.
+            Logic: English • CT Zero eligible • seller type blank/pro-compatible • same condition • same foil status • excludes your own listings • target listed price = lowest eligible listed price - $0.01 • target base price = target listed price - inferred CardTrader fee.
           </Text>
 
           {shownRows.length === 0 ? (
@@ -247,9 +250,12 @@ export function CardTraderRepriceView() {
                   <Table.Th>Set</Table.Th>
                   <Table.Th>Cond</Table.Th>
                   <Table.Th>Foil</Table.Th>
-                  <Table.Th>Current</Table.Th>
-                  <Table.Th>Market</Table.Th>
-                  <Table.Th>New</Table.Th>
+                  <Table.Th>Current Base</Table.Th>
+                  <Table.Th>Current Listed</Table.Th>
+                  <Table.Th>CT Fee</Table.Th>
+                  <Table.Th>Lowest Listed</Table.Th>
+                  <Table.Th>New Listed</Table.Th>
+                  <Table.Th>New Base</Table.Th>
                   <Table.Th>Seller</Table.Th>
                   <Table.Th>Status</Table.Th>
                 </Table.Tr>
@@ -262,7 +268,10 @@ export function CardTraderRepriceView() {
                     <Table.Td>{row.condition || "—"}</Table.Td>
                     <Table.Td>{row.foil ? "Foil" : "Non-foil"}</Table.Td>
                     <Table.Td>{money(row.currentPrice)}</Table.Td>
+                    <Table.Td>{money(row.currentListedPrice)}</Table.Td>
+                    <Table.Td>{money(row.cardTraderFee)}</Table.Td>
                     <Table.Td>{money(row.marketPrice)}</Table.Td>
+                    <Table.Td><Text fw={700}>{money(row.targetListedPrice)}</Text></Table.Td>
                     <Table.Td><Text fw={700}>{money(row.targetPrice)}</Text></Table.Td>
                     <Table.Td>{row.marketSeller || "—"}</Table.Td>
                     <Table.Td>{applyResult ? (row.ok === false ? "Failed" : "Updated") : "Preview"}</Table.Td>

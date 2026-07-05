@@ -110,12 +110,19 @@ function productQuantity(product) {
   return Number(product?.quantity ?? product?.stock ?? product?.available ?? 0);
 }
 
-function productPriceCents(product) {
+function productBasePriceCents(product) {
   const value =
-    product?.price?.cents ??
     product?.price_cents ??
+    product?.base_price_cents ??
+    product?.seller_price?.cents ??
+    product?.price?.cents ??
     product?.list_price?.cents ??
     null;
+  return value == null ? null : Math.round(Number(value));
+}
+
+function listingPriceCents(listing) {
+  const value = listing?.price?.cents ?? listing?.listed_price?.cents ?? listing?.public_price?.cents ?? null;
   return value == null ? null : Math.round(Number(value));
 }
 
@@ -143,7 +150,7 @@ async function findEligibleCompetitor(api, product, ownProductIds, { requestDela
   const foil = productFoil(product);
 
   if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
-    return { competitor: null, reason: "missing_blueprint_id" };
+    return { competitor: null, ownListing: null, reason: "missing_blueprint_id" };
   }
 
   await sleep(requestDelayMs);
@@ -157,12 +164,13 @@ async function findEligibleCompetitor(api, product, ownProductIds, { requestDela
   });
 
   const listings = Array.isArray(data?.[String(blueprintId)]) ? data[String(blueprintId)] : [];
+  const ownListing = listings.find((listing) => ownProductIds.has(String(listing?.id || ""))) || null;
 
   const eligible = listings
     .filter((listing) => {
       const listingId = String(listing?.id || "");
       return (
-        listing?.price?.cents != null &&
+        listingPriceCents(listing) != null &&
         !ownProductIds.has(listingId) &&
         listing?.user?.can_sell_via_hub === true &&
         isProfessionalCompatible(listing) &&
@@ -171,13 +179,13 @@ async function findEligibleCompetitor(api, product, ownProductIds, { requestDela
         listing?.graded !== true
       );
     })
-    .sort((a, b) => Number(a.price.cents) - Number(b.price.cents));
+    .sort((a, b) => listingPriceCents(a) - listingPriceCents(b));
 
   if (!eligible.length) {
-    return { competitor: null, reason: "no_eligible_market_listing", listingCount: listings.length };
+    return { competitor: null, ownListing, reason: "no_eligible_market_listing", listingCount: listings.length };
   }
 
-  return { competitor: eligible[0], reason: null, listingCount: listings.length };
+  return { competitor: eligible[0], ownListing, reason: null, listingCount: listings.length };
 }
 
 async function buildRepricePlan(options = {}) {
@@ -189,7 +197,7 @@ async function buildRepricePlan(options = {}) {
 
   const products = await fetchOwnProducts(api);
   const ownProductIds = new Set(products.map((product) => String(product?.id)).filter(Boolean));
-  const activeProducts = products.filter((product) => productQuantity(product) > 0 && productPriceCents(product) != null);
+  const activeProducts = products.filter((product) => productQuantity(product) > 0 && productBasePriceCents(product) != null);
   const targetProducts = limit > 0 ? activeProducts.slice(0, limit) : activeProducts;
 
   const changes = [];
@@ -199,16 +207,16 @@ async function buildRepricePlan(options = {}) {
     const product = targetProducts[index];
     const productId = product?.id;
     const blueprintId = Number(productBlueprintId(product));
-    const currentPriceCents = productPriceCents(product);
+    const currentBaseCents = productBasePriceCents(product);
     const condition = productCondition(product);
     const foil = productFoil(product);
 
     try {
-      const { competitor, reason, listingCount } = await findEligibleCompetitor(api, product, ownProductIds, {
+      const { competitor, ownListing, reason, listingCount } = await findEligibleCompetitor(api, product, ownProductIds, {
         requestDelayMs,
       });
 
-      if (!competitor?.price?.cents) {
+      if (!competitor || listingPriceCents(competitor) == null) {
         skipped.push({
           productId,
           blueprintId,
@@ -216,17 +224,20 @@ async function buildRepricePlan(options = {}) {
           setCode: productSetCode(product),
           condition,
           foil,
-          currentPrice: centsToMoney(currentPriceCents),
+          currentPrice: centsToMoney(currentBaseCents),
           reason,
           listingCount: listingCount ?? 0,
         });
         continue;
       }
 
-      const competitorCents = Math.round(Number(competitor.price.cents));
-      const targetCents = Math.max(minPriceCents, competitorCents - beatByCents);
+      const competitorListedCents = listingPriceCents(competitor);
+      const currentListedCents = listingPriceCents(ownListing) ?? currentBaseCents;
+      const inferredFeeCents = Math.max(0, currentListedCents - currentBaseCents);
+      const targetListedCents = Math.max(minPriceCents + inferredFeeCents, competitorListedCents - beatByCents);
+      const targetBaseCents = Math.max(minPriceCents, targetListedCents - inferredFeeCents);
 
-      if (targetCents === currentPriceCents) {
+      if (targetBaseCents === currentBaseCents) {
         skipped.push({
           productId,
           blueprintId,
@@ -234,9 +245,12 @@ async function buildRepricePlan(options = {}) {
           setCode: productSetCode(product),
           condition,
           foil,
-          currentPrice: centsToMoney(currentPriceCents),
-          marketPrice: centsToMoney(competitorCents),
-          targetPrice: centsToMoney(targetCents),
+          currentPrice: centsToMoney(currentBaseCents),
+          currentListedPrice: centsToMoney(currentListedCents),
+          cardTraderFee: centsToMoney(inferredFeeCents),
+          marketPrice: centsToMoney(competitorListedCents),
+          targetListedPrice: centsToMoney(targetListedCents),
+          targetPrice: centsToMoney(targetBaseCents),
           reason: "already_at_target",
         });
         continue;
@@ -250,14 +264,20 @@ async function buildRepricePlan(options = {}) {
         condition,
         foil,
         quantity: productQuantity(product),
-        currentPriceCents,
-        currentPrice: centsToMoney(currentPriceCents),
+        currentPriceCents: currentBaseCents,
+        currentPrice: centsToMoney(currentBaseCents),
+        currentListedPriceCents: currentListedCents,
+        currentListedPrice: centsToMoney(currentListedCents),
+        cardTraderFeeCents: inferredFeeCents,
+        cardTraderFee: centsToMoney(inferredFeeCents),
         marketProductId: competitor.id,
         marketSeller: competitor?.user?.username || null,
-        marketPriceCents: competitorCents,
-        marketPrice: centsToMoney(competitorCents),
-        targetPriceCents: targetCents,
-        targetPrice: centsToMoney(targetCents),
+        marketPriceCents: competitorListedCents,
+        marketPrice: centsToMoney(competitorListedCents),
+        targetListedPriceCents: targetListedCents,
+        targetListedPrice: centsToMoney(targetListedCents),
+        targetPriceCents: targetBaseCents,
+        targetPrice: centsToMoney(targetBaseCents),
       });
     } catch (err) {
       skipped.push({
@@ -267,7 +287,7 @@ async function buildRepricePlan(options = {}) {
         setCode: productSetCode(product),
         condition,
         foil,
-        currentPrice: centsToMoney(currentPriceCents),
+        currentPrice: centsToMoney(currentBaseCents),
         reason: "lookup_failed",
         error: err?.response?.data || err?.message || String(err),
       });
@@ -282,6 +302,7 @@ async function buildRepricePlan(options = {}) {
       cardTraderZero: true,
       sellerType: "ct_zero_professional_compatible",
       excludesOwnListings: true,
+      pricingMode: "listed_price_minus_one_cent_with_inferred_fee",
       beatByCents,
       minPriceCents,
     },

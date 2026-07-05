@@ -7,6 +7,7 @@ const router = express.Router();
 const CT_BASE = "https://api.cardtrader.com/api/v2";
 const TOKEN = process.env.CARDTRADER_TOKEN;
 const MAX_JOB_LOGS = 300;
+const DEFAULT_MARKETPLACE_DELAY_MS = 110; // ~9.1 marketplace calls/sec, under CardTrader's documented 10/sec limit.
 const jobs = new Map();
 
 function ct() {
@@ -239,27 +240,36 @@ async function fetchOwnProducts(api, job) {
   return all;
 }
 
-async function findEligibleCompetitor(api, product, ownProductIds, { requestDelayMs }) {
+async function findEligibleCompetitor(api, product, ownProductIds, { requestDelayMs, marketplaceCache, job }) {
   const blueprintId = Number(productBlueprintId(product));
   const condition = productCondition(product);
   const foil = productFoil(product);
 
   if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
-    return { competitor: null, ownListing: null, reason: "missing_blueprint_id" };
+    return { competitor: null, ownListing: null, reason: "missing_blueprint_id", fromCache: false };
   }
 
-  await sleep(requestDelayMs);
+  const cacheKey = `${blueprintId}|en|${foil ? "foil" : "nonfoil"}`;
+  let listings = marketplaceCache?.get(cacheKey);
+  let fromCache = true;
 
-  const { data } = await api.get("/marketplace/products", {
-    params: {
-      blueprint_id: blueprintId,
-      language: "en",
-      foil,
-    },
-  });
+  if (!listings) {
+    fromCache = false;
+    await sleep(requestDelayMs);
 
-  const listings = Array.isArray(data?.[String(blueprintId)]) ? data[String(blueprintId)] : [];
-  const ownListing = listings.find((listing) => ownProductIds.has(String(listing?.id || ""))) || null;
+    const { data } = await api.get("/marketplace/products", {
+      params: {
+        blueprint_id: blueprintId,
+        language: "en",
+        foil,
+      },
+    });
+
+    listings = Array.isArray(data?.[String(blueprintId)]) ? data[String(blueprintId)] : [];
+    marketplaceCache?.set(cacheKey, listings);
+  }
+
+  const ownListing = listings.find((listing) => String(listing?.id || "") === String(product?.id || "")) || null;
 
   const eligible = listings
     .filter((listing) => {
@@ -277,22 +287,26 @@ async function findEligibleCompetitor(api, product, ownProductIds, { requestDela
     .sort((a, b) => listingPriceCents(a) - listingPriceCents(b));
 
   if (!eligible.length) {
-    return { competitor: null, ownListing, reason: "no_eligible_market_listing", listingCount: listings.length };
+    return { competitor: null, ownListing, reason: "no_eligible_market_listing", listingCount: listings.length, fromCache };
   }
 
-  return { competitor: eligible[0], ownListing, reason: null, listingCount: listings.length };
+  return { competitor: eligible[0], ownListing, reason: null, listingCount: listings.length, fromCache };
 }
 
 async function buildRepricePlan(options = {}, job = null) {
   const api = ct();
   const minPriceCents = Math.max(1, Math.round(Number(options.minPriceCents ?? 1)));
   const beatByCents = Math.max(1, Math.round(Number(options.beatByCents ?? 1)));
-  const requestDelayMs = Math.max(150, Math.round(Number(options.requestDelayMs ?? 175)));
+  const requestDelayMs = Math.max(DEFAULT_MARKETPLACE_DELAY_MS, Math.round(Number(options.requestDelayMs ?? DEFAULT_MARKETPLACE_DELAY_MS)));
   const limit = Number(options.limit || 0);
+  const marketplaceCache = new Map();
+  let marketplaceApiCalls = 0;
+  let marketplaceCacheHits = 0;
 
   if (job) {
     job.status = "running";
     job.stage = "Loading inventory";
+    pushLog(job, `Fast mode enabled: ${requestDelayMs}ms delay per uncached marketplace call (~${(1000 / requestDelayMs).toFixed(1)} calls/sec), plus per-preview marketplace cache.`);
     updateJobProgress(job);
   }
 
@@ -329,9 +343,14 @@ async function buildRepricePlan(options = {}, job = null) {
     }
 
     try {
-      const { competitor, ownListing, reason, listingCount } = await findEligibleCompetitor(api, product, ownProductIds, {
+      const { competitor, ownListing, reason, listingCount, fromCache } = await findEligibleCompetitor(api, product, ownProductIds, {
         requestDelayMs,
+        marketplaceCache,
+        job,
       });
+
+      if (fromCache) marketplaceCacheHits += 1;
+      else marketplaceApiCalls += 1;
 
       if (!competitor || listingPriceCents(competitor) == null) {
         skipped.push({
@@ -443,7 +462,7 @@ async function buildRepricePlan(options = {}, job = null) {
       job.skippedCount = skipped.length;
       updateJobProgress(job);
       if (job.scanned <= 5 || job.scanned % 10 === 0 || job.scanned === job.totalToScan) {
-        pushLog(job, `Scanned ${job.scanned}/${job.totalToScan}. Changes: ${changes.length}. Skipped: ${skipped.length}. Current: ${name}`);
+        pushLog(job, `Scanned ${job.scanned}/${job.totalToScan}. Changes: ${changes.length}. Skipped: ${skipped.length}. API calls: ${marketplaceApiCalls}. Cache hits: ${marketplaceCacheHits}. Current: ${name}`);
       }
     }
   }
@@ -458,6 +477,10 @@ async function buildRepricePlan(options = {}, job = null) {
       excludesOwnListings: true,
       pricingMode: "lowest_listed_price_minus_one_cent_with_inferred_fee",
       requiresOwnMarketplaceListing: true,
+      marketplaceDelayMs: requestDelayMs,
+      marketplaceApiCalls,
+      marketplaceCacheHits,
+      marketplaceCacheSize: marketplaceCache.size,
       beatByCents,
       minPriceCents,
     },
@@ -478,7 +501,7 @@ async function buildRepricePlan(options = {}, job = null) {
     job.skippedCount = skipped.length;
     job.currentItem = null;
     job.result = result;
-    pushLog(job, `Preview complete. ${changes.length} change(s), ${skipped.length} skipped.`);
+    pushLog(job, `Preview complete. ${changes.length} change(s), ${skipped.length} skipped. Marketplace API calls: ${marketplaceApiCalls}. Cache hits: ${marketplaceCacheHits}.`);
     updateJobProgress(job);
   }
 

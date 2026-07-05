@@ -52,13 +52,51 @@ type RepriceResponse = {
   details?: unknown;
 };
 
+type RepriceJobLog = {
+  at: string;
+  message: string;
+};
+
+type RepriceJob = {
+  id: string;
+  mode: "preview";
+  status: "queued" | "running" | "completed" | "failed";
+  stage: string;
+  progress: number;
+  scanned: number;
+  totalToScan: number;
+  totalLiveProducts: number;
+  activeProducts: number;
+  changed: number;
+  skippedCount: number;
+  currentItem?: string | null;
+  elapsedSeconds?: number;
+  estimatedRemainingSeconds?: number | null;
+  logs: RepriceJobLog[];
+  result?: RepriceResponse | null;
+  error?: string | null;
+};
+
 function money(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return "—";
   return `$${Number(value).toFixed(2)}`;
 }
 
+function formatDuration(seconds: number | null | undefined) {
+  if (seconds == null || Number.isNaN(seconds)) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}m ${secs}s`;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function CardTraderRepriceView() {
   const [preview, setPreview] = useState<RepriceResponse | null>(null);
+  const [previewJob, setPreviewJob] = useState<RepriceJob | null>(null);
   const [applyResult, setApplyResult] = useState<RepriceResponse | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
@@ -72,7 +110,9 @@ export function CardTraderRepriceView() {
     return source.slice(0, 100);
   }, [preview, applyResult]);
 
-  const progressValue = preview
+  const progressValue = previewJob
+    ? previewJob.progress
+    : preview
     ? preview.activeProducts > 0
       ? Math.min(100, Math.round((preview.scanned / preview.activeProducts) * 100))
       : 100
@@ -84,9 +124,11 @@ export function CardTraderRepriceView() {
     try {
       setLoadingPreview(true);
       setApplyResult(null);
+      setPreview(null);
+      setPreviewJob(null);
       setError(null);
 
-      const res = await fetch("/api/ct/reprice/preview", {
+      const startRes = await fetch("/api/ct/reprice/preview/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -96,9 +138,29 @@ export function CardTraderRepriceView() {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Preview failed");
-      setPreview(data);
+      const startJob = await startRes.json();
+      if (!startRes.ok) throw new Error(startJob?.error || "Could not start preview");
+      setPreviewJob(startJob);
+
+      let currentJob = startJob as RepriceJob;
+      while (currentJob.status === "queued" || currentJob.status === "running") {
+        await wait(1000);
+        const pollRes = await fetch(`/api/ct/reprice/jobs/${startJob.id}`);
+        const polledJob = await pollRes.json();
+        if (!pollRes.ok) throw new Error(polledJob?.error || "Could not read preview progress");
+        currentJob = polledJob;
+        setPreviewJob(polledJob);
+      }
+
+      if (currentJob.status === "failed") {
+        throw new Error(currentJob.error || "Preview failed");
+      }
+
+      if (currentJob.result) {
+        setPreview(currentJob.result);
+      } else {
+        throw new Error("Preview finished without a result");
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Preview failed");
     } finally {
@@ -110,7 +172,7 @@ export function CardTraderRepriceView() {
     if (!preview?.changes?.length) return;
 
     const yes = window.confirm(
-      `This will update ${applyLimit || preview.changes.length} CardTrader base price(s). CardTrader will calculate the listed price/fee layer. This does NOT touch ManaPool. Continue?`
+      `This will update ${applyLimit || preview.changes.length} CardTrader base price(s). CardTrader will calculate the final marketplace/cart fee layer. This does NOT touch ManaPool. Continue?`
     );
     if (!yes) return;
 
@@ -145,12 +207,12 @@ export function CardTraderRepriceView() {
       <Box>
         <Title order={2}>CardTrader Repricing</Title>
         <Text c="dimmed" size="sm" mt={4}>
-          Preview and update CardTrader base prices only. The target is to keep your live CardTrader listed price $0.01 below the cheapest eligible live listing.
+          Preview and update CardTrader base prices only. The target is to keep your live CardTrader marketplace price $0.01 below the cheapest eligible live listing.
         </Text>
       </Box>
 
       <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
-        This tool does not update ManaPool. It uses CardTrader live listing prices and infers your CardTrader fee layer from your live listing when available.
+        This tool does not update ManaPool. It compares marketplace/listed prices, infers the CardTrader fee layer from your own marketplace listing, and skips an item if your own marketplace listing is missing.
       </Alert>
 
       <Paper withBorder radius="md" p="md">
@@ -212,12 +274,54 @@ export function CardTraderRepriceView() {
 
       {error && <Text c="red" size="sm">{error}</Text>}
 
-      {(loadingPreview || loadingApply) && (
+      {(previewJob || loadingPreview || loadingApply) && (
         <Paper withBorder radius="md" p="md">
-          <Group gap="sm">
-            <Loader size="sm" />
-            <Text size="sm">{loadingPreview ? "Building repricing preview…" : "Applying CardTrader price updates…"}</Text>
+          <Group justify="space-between" mb="xs" wrap="wrap">
+            <Group gap="sm">
+              {(loadingPreview || loadingApply) && <Loader size="sm" />}
+              <Text size="sm" fw={600}>
+                {loadingApply ? "Applying CardTrader price updates…" : previewJob?.stage || "Building repricing preview…"}
+              </Text>
+            </Group>
+            {previewJob && (
+              <Group gap="xs" wrap="wrap">
+                <Badge variant="light">{previewJob.status}</Badge>
+                <Badge variant="light">{previewJob.scanned}/{previewJob.totalToScan || "?"}</Badge>
+                <Badge color="green" variant="light">Changes: {previewJob.changed}</Badge>
+                <Badge color="gray" variant="light">Skipped: {previewJob.skippedCount}</Badge>
+                <Badge color="blue" variant="light">Elapsed: {formatDuration(previewJob.elapsedSeconds)}</Badge>
+                {previewJob.estimatedRemainingSeconds != null && (
+                  <Badge color="orange" variant="light">ETA: {formatDuration(previewJob.estimatedRemainingSeconds)}</Badge>
+                )}
+              </Group>
+            )}
           </Group>
+
+          <Progress value={progressValue} radius="xl" mb="sm" />
+
+          {previewJob?.currentItem && (
+            <Text size="xs" c="dimmed" mb="sm">Currently checking: {previewJob.currentItem}</Text>
+          )}
+
+          {!!previewJob?.logs?.length && (
+            <Box
+              p="sm"
+              style={{
+                maxHeight: 220,
+                overflow: "auto",
+                border: "1px solid var(--mantine-color-gray-3)",
+                borderRadius: 8,
+                fontFamily: "monospace",
+                fontSize: 12,
+              }}
+            >
+              {previewJob.logs.slice(-80).map((line, index) => (
+                <Text key={`${line.at}-${index}`} size="xs" style={{ fontFamily: "monospace" }}>
+                  [{new Date(line.at).toLocaleTimeString()}] {line.message}
+                </Text>
+              ))}
+            </Box>
+          )}
         </Paper>
       )}
 
@@ -237,7 +341,7 @@ export function CardTraderRepriceView() {
           <Progress value={progressValue} radius="xl" mb="sm" />
 
           <Text size="xs" c="dimmed" mb="md">
-            Logic: English • CT Zero eligible • seller type blank/pro-compatible • same condition • same foil status • excludes your own listings • target listed price = lowest eligible listed price - $0.01 • target base price = target listed price - inferred CardTrader fee.
+            Logic: English • CT Zero eligible • seller type blank/pro-compatible • same condition • same foil status • excludes your own listings • target listed price = lowest eligible listed price - $0.01 • target base price = target listed price - inferred CardTrader fee. If your own marketplace listing is missing, it skips the item.
           </Text>
 
           {shownRows.length === 0 ? (

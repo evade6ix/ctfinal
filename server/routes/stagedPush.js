@@ -9,6 +9,18 @@ const router = express.Router();
 const CT_BASE = "https://api.cardtrader.com/api/v2";
 const TOKEN = process.env.CARDTRADER_TOKEN;
 
+const MTG_GAME_IDS = new Set(["1"]);
+
+function isMagicGame(game) {
+  const normalized = String(game || "").trim().toLowerCase();
+  return MTG_GAME_IDS.has(normalized) || normalized === "magic" || normalized === "mtg";
+}
+
+function isKnownNonMagicGame(game) {
+  const normalized = String(game || "").trim();
+  return !!normalized && !isMagicGame(normalized);
+}
+
 function ct() {
   return axios.create({
     baseURL: CT_BASE,
@@ -79,16 +91,23 @@ function normalizeStagedItem(raw, gameId) {
 }
 
 function buildCardTraderPayload(item) {
+  const properties = {
+    condition: item.condition,
+  };
+
+  // CardTrader uses MTG-specific property names for Magic. Do not send these
+  // for Riftbound / other games, because CardTrader validates properties by game.
+  if (!item.game || isMagicGame(item.game)) {
+    properties.mtg_language = "en";
+    properties.mtg_foil = item.isFoil;
+  }
+
   return {
     blueprint_id: item.blueprintId,
     quantity: item.quantity,
     price: item.price,
     error_mode: "strict",
-    properties: {
-      condition: item.condition,
-      mtg_language: "en",
-      mtg_foil: item.isFoil,
-    },
+    properties,
   };
 }
 
@@ -177,6 +196,20 @@ async function pushStaged(req, res, mode) {
       }
 
       const item = normalized.item;
+
+      if (isKnownNonMagicGame(item.game) && mode !== "cardtrader") {
+        failed += 1;
+        results.push({
+          ok: false,
+          mode,
+          blueprintId: item.blueprintId,
+          game: item.game,
+          reason:
+            "Non-MTG games can only be pushed to CardTrader. Use CardTrader Only.",
+        });
+        continue;
+      }
+
       let cardTraderId = null;
       let cardTraderResponse = null;
       let mongoInventoryItem = null;
@@ -226,6 +259,7 @@ async function pushStaged(req, res, mode) {
         results.push({
           ok: true,
           mode,
+          game: item.game,
           blueprintId: item.blueprintId,
           cardTraderId,
           inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
@@ -244,6 +278,7 @@ async function pushStaged(req, res, mode) {
         results.push({
           ok: false,
           mode,
+          game: item.game,
           blueprintId: item.blueprintId,
           status: err?.response?.status,
           error: err?.response?.data || err?.message || "Request failed",

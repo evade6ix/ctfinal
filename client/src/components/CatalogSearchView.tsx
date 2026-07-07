@@ -80,13 +80,6 @@ function clampSuggested(market: number | null | undefined) {
   return Math.max(0.01, Math.round((market - 0.15) * 100) / 100);
 }
 
-function conditionToCardTrader(condition: Condition) {
-  if (condition === "LP") return "Slightly Played";
-  if (condition === "MP") return "Moderately Played";
-  if (condition === "HP") return "Heavily Played";
-  return "Near Mint";
-}
-
 export function CatalogSearchView() {
   const [games, setGames] = useState<Option[]>([]);
   const [gameId, setGameId] = useState<string | null>(null);

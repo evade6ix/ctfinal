@@ -18,6 +18,19 @@ const MANAPOOL_BATCH_SIZE = process.env.MANAPOOL_BATCH_SIZE
   ? Number(process.env.MANAPOOL_BATCH_SIZE)
   : 500;
 
+const MTG_GAME_IDS = new Set(["1"]);
+
+function isMagicGame(game) {
+  const normalized = String(game || "").trim().toLowerCase();
+  return MTG_GAME_IDS.has(normalized) || normalized === "magic" || normalized === "mtg";
+}
+
+function isManaPoolSupportedItem(item) {
+  // Legacy MTG rows may not have a game saved yet, so keep blank-game rows eligible.
+  if (!item?.game) return true;
+  return isMagicGame(item.game);
+}
+
 const scryfallApi = axios.create({
   baseURL: "https://api.scryfall.com",
   timeout: 30000,
@@ -288,8 +301,33 @@ export async function syncInventoryItemsToManaPool(inventoryItems, options = {})
     mongoUpdated: 0,
     skippedBeforePush: [],
     skippedByManaPool: [],
+    skippedUnsupportedGame: [],
     inventory: [],
   };
+
+  if (!items.length) {
+    return result;
+  }
+
+  const manaPoolItems = [];
+
+  for (const item of items) {
+    if (isManaPoolSupportedItem(item)) {
+      manaPoolItems.push(item);
+      continue;
+    }
+
+    result.skippedUnsupportedGame.push({
+      id: item._id?.toString?.() || null,
+      game: item.game || null,
+      summary: summarizeItem(item),
+      reason: "ManaPool is Magic-only; skipping non-MTG inventory.",
+    });
+  }
+
+  if (!manaPoolItems.length) {
+    return result;
+  }
 
   if (!MANAPOOL_EMAIL || !MANAPOOL_ACCESS_TOKEN) {
     result.ok = false;
@@ -299,14 +337,10 @@ export async function syncInventoryItemsToManaPool(inventoryItems, options = {})
     return result;
   }
 
-  if (!items.length) {
-    return result;
-  }
-
   const scryfallCache = new Map();
   const payload = [];
 
-  for (const item of items) {
+  for (const item of manaPoolItems) {
     const summary = summarizeItem(item);
     const quantity = getQuantity(item);
     const priceCents = getPriceCents(item);
@@ -321,8 +355,8 @@ export async function syncInventoryItemsToManaPool(inventoryItems, options = {})
     if (!conditionId) issues.push(`Could not map condition: ${item.condition}`);
 
     if (!Number.isInteger(quantity) || quantity < 0) {
-  issues.push("Quantity is invalid");
-}
+      issues.push("Quantity is invalid");
+    }
 
     if (!Number.isInteger(priceCents) || priceCents <= 0) {
       issues.push("Price is missing/invalid");

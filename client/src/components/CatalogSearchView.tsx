@@ -4,6 +4,7 @@ import {
   Badge,
   Box,
   Button,
+  Divider,
   Group,
   Image,
   Loader,
@@ -275,10 +276,8 @@ export function CatalogSearchView() {
     setStaged((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
   }
 
-  function stageCard(card: CatalogCard) {
-    const suggested = clampSuggested(card.market);
-    setStaged((prev) => [{ key: `${card.id}-${Date.now()}`, blueprintId: card.id, gameId: card.gameId || gameId || undefined, name: card.name, setName: card.setName, setCode: card.setCode, imageUrl: card.imageUrl, market: card.market, suggested, price: suggested, quantity: 1, condition: "NM", foil: foilDefault }, ...prev]);
-    notifications.show({ title: "Staged", message: `${card.name} added to staged listings.` });
+  function addStagedItem(item: StagedItem) {
+    setStaged((prev) => [item, ...prev]);
   }
 
   return (
@@ -335,27 +334,7 @@ export function CatalogSearchView() {
           {!loadingSearch && !!results.length && (
             <Stack gap="sm" mt="md">
               {results.map((card) => (
-                <Paper key={card.id} withBorder radius="md" p="md">
-                  <Group align="flex-start" wrap="nowrap">
-                    <Image src={card.imageUrl} w={62} h={86} radius="md" fit="contain" fallbackSrc="https://placehold.co/124x172?text=Card" />
-                    <Box style={{ flex: 1, minWidth: 0 }}>
-                      <Group justify="space-between" align="flex-start" wrap="nowrap">
-                        <Box style={{ minWidth: 0 }}>
-                          <Text fw={700} lineClamp={1}>{card.name}</Text>
-                          <Text size="xs" c="dimmed">{card.setCode ? `${card.setCode} – ${card.setName ?? ""}` : card.setName ?? ""}</Text>
-                          <Text size="xs" c="dimmed">{card.rarity ? `Rarity: ${card.rarity}` : "Rarity: —"}</Text>
-                        </Box>
-                        <Badge size="sm" variant="light">{card.number || "No."}</Badge>
-                      </Group>
-                      <Group mt="xs" gap="lg" align="center" wrap="wrap">
-                        <Text size="sm">Market <Text span fw={700}>{money(card.market)}</Text></Text>
-                        <Text size="sm">Suggested <Text span fw={700}>{money(clampSuggested(card.market))}</Text></Text>
-                        <Text size="xs" c="dimmed">English • CT Zero • Pro • Near Mint • {foilDefault ? "Foil" : "Non-foil"}</Text>
-                      </Group>
-                    </Box>
-                    <Button radius="xl" leftSection={<IconShoppingCart size={16} />} onClick={() => stageCard(card)}>Stage</Button>
-                  </Group>
-                </Paper>
+                <CatalogResultRow key={card.id} card={card} defaultFoil={foilDefault} onStage={addStagedItem} />
               ))}
               {totalPages > 1 && <Group justify="space-between"><Text size="xs" c="dimmed">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</Text><Pagination value={page} onChange={(newPage) => runSearch(newPage)} total={totalPages} size="sm" /></Group>}
             </Stack>
@@ -396,5 +375,129 @@ export function CatalogSearchView() {
         </Tabs.Panel>
       </Tabs>
     </Stack>
+  );
+}
+
+function CatalogResultRow({
+  card,
+  defaultFoil,
+  onStage,
+}: {
+  card: CatalogCard;
+  defaultFoil: boolean;
+  onStage: (item: StagedItem) => void;
+}) {
+  const [qty, setQty] = useState(1);
+  const [condition, setCondition] = useState<Condition>("NM");
+  const [foil, setFoil] = useState(defaultFoil);
+  const market = card.market ?? null;
+  const suggested = clampSuggested(market);
+  const [price, setPrice] = useState<number | null>(suggested);
+
+  useEffect(() => {
+    setFoil(defaultFoil);
+  }, [defaultFoil]);
+
+  useEffect(() => {
+    setPrice(suggested);
+  }, [suggested]);
+
+  const lineTotal = price != null && Number.isFinite(price) ? price * (qty || 0) : null;
+  const canStage = qty > 0 && typeof price === "number" && Number.isFinite(price) && price > 0;
+
+  function handleStageClick() {
+    if (!canStage) return;
+
+    onStage({
+      key: `${card.id}-${Date.now()}`,
+      blueprintId: card.id,
+      gameId: card.gameId,
+      name: card.name,
+      setName: card.setName,
+      setCode: card.setCode,
+      imageUrl: card.imageUrl,
+      market,
+      suggested,
+      price,
+      quantity: qty,
+      condition,
+      foil,
+    });
+
+    notifications.show({ title: "Staged", message: `${card.name} added to staged listings.` });
+  }
+
+  return (
+    <Paper withBorder radius="md" p="md">
+      <Group align="flex-start" justify="space-between" wrap="nowrap">
+        <Group align="flex-start" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+          <Image src={card.imageUrl} w={62} h={86} radius="md" fit="contain" fallbackSrc="https://placehold.co/124x172?text=Card" />
+          <Box style={{ flex: 1, minWidth: 0 }}>
+            <Group justify="space-between" align="flex-start" wrap="nowrap">
+              <Box style={{ minWidth: 0 }}>
+                <Text fw={700} lineClamp={1}>{card.name}</Text>
+                <Text size="xs" c="dimmed">{card.setCode ? `${card.setCode} – ${card.setName ?? ""}` : card.setName ?? ""}</Text>
+                <Text size="xs" c="dimmed">{card.rarity ? `Rarity: ${card.rarity}` : "Rarity: —"}</Text>
+              </Box>
+              <Badge size="sm" variant="light">{card.number || "No."}</Badge>
+            </Group>
+
+            <Group mt="xs" gap="lg" align="center" wrap="wrap">
+              <Text size="sm">Market <Text span fw={700}>{money(market)}</Text></Text>
+              <Text size="sm">Suggested <Text span fw={700}>{money(suggested)}</Text></Text>
+              <Text size="sm" c="dimmed">Line total <Text span fw={900}>{money(lineTotal)}</Text></Text>
+            </Group>
+
+            <Divider my="sm" />
+
+            <Group gap="md" align="flex-end" wrap="wrap">
+              <NumberInput
+                label="Qty"
+                value={qty}
+                onChange={(value) => {
+                  const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : 1;
+                  setQty(Number.isFinite(num) ? Math.max(1, Math.floor(num)) : 1);
+                }}
+                min={1}
+                step={1}
+                clampBehavior="strict"
+                w={90}
+                radius="md"
+              />
+
+              <NumberInput
+                label="Price"
+                value={price ?? undefined}
+                onChange={(value) => {
+                  const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : null;
+                  setPrice(num != null && Number.isFinite(num) ? num : null);
+                }}
+                min={0.01}
+                step={0.01}
+                decimalScale={2}
+                fixedDecimalScale
+                prefix="$"
+                w={130}
+                radius="md"
+              />
+
+              <Box>
+                <Text size="sm" fw={600} mb={6}>Condition</Text>
+                <SegmentedControl size="xs" value={condition} onChange={(value) => setCondition(value as Condition)} data={[{ label: "NM", value: "NM" }, { label: "LP", value: "LP" }, { label: "MP", value: "MP" }, { label: "HP", value: "HP" }]} />
+              </Box>
+
+              <Box>
+                <Text size="sm" fw={600} mb={6}>Foil</Text>
+                <Switch checked={foil} onChange={(e) => setFoil(e.currentTarget.checked)} />
+              </Box>
+
+              <Box style={{ flex: 1 }} />
+
+              <Button radius="xl" leftSection={<IconShoppingCart size={16} />} disabled={!canStage} onClick={handleStageClick}>Stage</Button>
+            </Group>
+          </Box>
+        </Group>
+      </Group>
+    </Paper>
   );
 }

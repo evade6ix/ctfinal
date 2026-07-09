@@ -27,6 +27,7 @@ import { IconAlertTriangle, IconRocket, IconSearch, IconShoppingCart } from "@ta
 type Option = { value: string; label: string; code?: string; cached?: boolean };
 type Condition = "NM" | "LP" | "MP" | "HP";
 type PushMode = "all" | "manapool" | "cardtrader";
+type ConditionPrices = Record<Condition, number | null>;
 
 type CatalogCard = {
   id: number | string;
@@ -60,6 +61,20 @@ const PAGE_SIZE = 50;
 const STAGED_STORAGE_KEY = "ct_staged_v1";
 const MTG_GAME_IDS = new Set(["1"]);
 
+const CONDITION_OPTIONS: { value: Condition; label: string; marketCondition: string }[] = [
+  { value: "NM", label: "NM", marketCondition: "Near Mint" },
+  { value: "LP", label: "LP", marketCondition: "Slightly Played" },
+  { value: "MP", label: "MP", marketCondition: "Moderately Played" },
+  { value: "HP", label: "HP", marketCondition: "Heavily Played" },
+];
+
+const EMPTY_CONDITION_PRICES: ConditionPrices = {
+  NM: null,
+  LP: null,
+  MP: null,
+  HP: null,
+};
+
 const PUSH_CONFIG: Record<PushMode, { label: string; endpoint: string; successName: string }> = {
   all: { label: "Push Live (All)", endpoint: "/api/staged-push/all", successName: "CardTrader + ManaPool" },
   manapool: { label: "ManaPool Only", endpoint: "/api/staged-push/manapool", successName: "ManaPool" },
@@ -79,6 +94,11 @@ function money(n: number | null | undefined) {
 function clampSuggested(market: number | null | undefined) {
   if (market == null || Number.isNaN(market)) return null;
   return Math.max(0.01, Math.round((market - 0.15) * 100) / 100);
+}
+
+function numberOrNull(value: unknown) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 export function CatalogSearchView() {
@@ -364,7 +384,7 @@ export function CatalogSearchView() {
                     </Group>
                     <NumberInput label="Qty" value={item.quantity} onChange={(value) => { const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : item.quantity; updateStagedItem(item.key, { quantity: Number.isFinite(num) ? Math.max(1, Math.floor(num)) : 1 }); }} min={1} step={1} clampBehavior="strict" w={90} radius="md" />
                     <NumberInput label="Price" value={item.price ?? undefined} onChange={(value) => { const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : null; updateStagedItem(item.key, { price: num != null && Number.isFinite(num) ? num : null }); }} min={0.01} step={0.01} decimalScale={2} fixedDecimalScale prefix="$" w={130} radius="md" />
-                    <Box><Text size="xs" fw={600} mb={4}>Condition</Text><SegmentedControl size="xs" value={item.condition} onChange={(value) => updateStagedItem(item.key, { condition: value as Condition })} data={[{ label: "NM", value: "NM" }, { label: "LP", value: "LP" }, { label: "MP", value: "MP" }, { label: "HP", value: "HP" }]} /></Box>
+                    <Box><Text size="xs" fw={600} mb={4}>Condition</Text><SegmentedControl size="xs" value={item.condition} onChange={(value) => updateStagedItem(item.key, { condition: value as Condition })} data={CONDITION_OPTIONS.map(({ label, value }) => ({ label, value }))} /></Box>
                     <Box><Text size="xs" fw={600} mb={4}>Foil</Text><Switch size="sm" checked={item.foil} onChange={(e) => updateStagedItem(item.key, { foil: e.currentTarget.checked })} /></Box>
                     <Button variant="subtle" color="red" onClick={() => setStaged((prev) => prev.filter((row) => row.key !== item.key))}>Remove</Button>
                   </Group>
@@ -391,19 +411,82 @@ function CatalogResultRow({
   const [condition, setCondition] = useState<Condition>("NM");
   const [foil, setFoil] = useState(defaultFoil);
   const market = card.market ?? null;
-  const suggested = clampSuggested(market);
+  const [conditionPrices, setConditionPrices] = useState<ConditionPrices>({ ...EMPTY_CONDITION_PRICES, NM: market });
+  const [loadingConditionPrices, setLoadingConditionPrices] = useState(false);
+  const [conditionPriceError, setConditionPriceError] = useState<string | null>(null);
+  const [manualPriceTouched, setManualPriceTouched] = useState(false);
+  const selectedMarket = conditionPrices[condition] ?? (condition === "NM" ? market : null);
+  const suggested = clampSuggested(selectedMarket);
   const [price, setPrice] = useState<number | null>(suggested);
 
   useEffect(() => {
     setFoil(defaultFoil);
+    setManualPriceTouched(false);
   }, [defaultFoil]);
 
   useEffect(() => {
-    setPrice(suggested);
-  }, [suggested]);
+    let cancelled = false;
+
+    async function loadConditionPrices() {
+      const startingPrices: ConditionPrices = { ...EMPTY_CONDITION_PRICES, NM: market };
+      setConditionPrices(startingPrices);
+      setLoadingConditionPrices(true);
+      setConditionPriceError(null);
+
+      try {
+        const entries = await Promise.all(
+          CONDITION_OPTIONS.map(async (option) => {
+            const params = new URLSearchParams({
+              blueprint_id: String(card.id),
+              condition: option.marketCondition,
+              foil: String(foil),
+              language: "en",
+            });
+
+            try {
+              const res = await fetch(`/api/catalog/market?${params.toString()}`);
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.error || "Market lookup failed");
+              return [option.value, numberOrNull(data?.market)] as const;
+            } catch (err) {
+              console.error(`Failed to load ${option.value} market for ${card.name}`, err);
+              return [option.value, null] as const;
+            }
+          })
+        );
+
+        if (cancelled) return;
+        const nextPrices: ConditionPrices = { ...EMPTY_CONDITION_PRICES };
+        entries.forEach(([key, value]) => {
+          nextPrices[key] = value;
+        });
+        if (nextPrices.NM == null) nextPrices.NM = market;
+        setConditionPrices(nextPrices);
+      } catch (err: any) {
+        if (!cancelled) setConditionPriceError(err.message || "Failed to load condition prices");
+      } finally {
+        if (!cancelled) setLoadingConditionPrices(false);
+      }
+    }
+
+    loadConditionPrices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [card.id, card.name, foil, market]);
+
+  useEffect(() => {
+    if (!manualPriceTouched) setPrice(suggested);
+  }, [manualPriceTouched, suggested]);
 
   const lineTotal = price != null && Number.isFinite(price) ? price * (qty || 0) : null;
   const canStage = qty > 0 && typeof price === "number" && Number.isFinite(price) && price > 0;
+
+  function handleConditionChange(value: string) {
+    setCondition(value as Condition);
+    setManualPriceTouched(false);
+  }
 
   function handleStageClick() {
     if (!canStage) return;
@@ -416,7 +499,7 @@ function CatalogResultRow({
       setName: card.setName,
       setCode: card.setCode,
       imageUrl: card.imageUrl,
-      market,
+      market: selectedMarket,
       suggested,
       price,
       quantity: qty,
@@ -443,10 +526,20 @@ function CatalogResultRow({
             </Group>
 
             <Group mt="xs" gap="lg" align="center" wrap="wrap">
-              <Text size="sm">Market <Text span fw={700}>{money(market)}</Text></Text>
+              <Text size="sm">Selected market <Text span fw={700}>{money(selectedMarket)}</Text></Text>
               <Text size="sm">Suggested <Text span fw={700}>{money(suggested)}</Text></Text>
               <Text size="sm" c="dimmed">Line total <Text span fw={900}>{money(lineTotal)}</Text></Text>
             </Group>
+
+            <Group mt="xs" gap="xs" align="center" wrap="wrap">
+              <Text size="xs" fw={600}>CT Zero / Pro {foil ? "foil" : "non-foil"} prices:</Text>
+              {CONDITION_OPTIONS.map((option) => (
+                <Badge key={option.value} size="sm" variant={option.value === condition ? "filled" : "light"} radius="sm">
+                  {option.label}: {loadingConditionPrices && conditionPrices[option.value] == null ? "..." : money(conditionPrices[option.value])}
+                </Badge>
+              ))}
+            </Group>
+            {conditionPriceError && <Text size="xs" c="red" mt={4}>{conditionPriceError}</Text>}
 
             <Divider my="sm" />
 
@@ -470,6 +563,7 @@ function CatalogResultRow({
                 value={price ?? undefined}
                 onChange={(value) => {
                   const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : null;
+                  setManualPriceTouched(true);
                   setPrice(num != null && Number.isFinite(num) ? num : null);
                 }}
                 min={0.01}
@@ -483,12 +577,12 @@ function CatalogResultRow({
 
               <Box>
                 <Text size="sm" fw={600} mb={6}>Condition</Text>
-                <SegmentedControl size="xs" value={condition} onChange={(value) => setCondition(value as Condition)} data={[{ label: "NM", value: "NM" }, { label: "LP", value: "LP" }, { label: "MP", value: "MP" }, { label: "HP", value: "HP" }]} />
+                <SegmentedControl size="xs" value={condition} onChange={handleConditionChange} data={CONDITION_OPTIONS.map(({ label, value }) => ({ label, value }))} />
               </Box>
 
               <Box>
                 <Text size="sm" fw={600} mb={6}>Foil</Text>
-                <Switch checked={foil} onChange={(e) => setFoil(e.currentTarget.checked)} />
+                <Switch checked={foil} onChange={(e) => { setFoil(e.currentTarget.checked); setManualPriceTouched(false); }} />
               </Box>
 
               <Box style={{ flex: 1 }} />

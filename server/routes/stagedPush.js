@@ -339,7 +339,7 @@ async function pushStaged(req, res, mode) {
           blueprintId: item.blueprintId,
           cardTraderId,
           inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
-          cardtraderPayload,
+          cardtraderPayload: cardTraderPayload,
           cardtrader: summarizeCardTraderProduct(cardTraderResponse),
           manapool: summarizeManaPoolResult(manaPoolResult),
         });
@@ -368,7 +368,7 @@ async function pushStaged(req, res, mode) {
             blueprintId: item.blueprintId,
             cardTraderId,
             inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
-            cardtraderPayload,
+            cardtraderPayload: cardTraderPayload,
             cardtrader: summarizeCardTraderProduct(cardTraderResponse),
             manapool: summarizeManaPoolResult(manaPoolResult),
             warningMessage: err?.response?.data || err?.message || "Completed with warning after live side effect",

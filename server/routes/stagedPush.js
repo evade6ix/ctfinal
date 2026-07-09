@@ -218,6 +218,7 @@ async function pushStaged(req, res, mode) {
     const results = [];
     let created = 0;
     let failed = 0;
+    let warnings = 0;
 
     for (const raw of items) {
       const normalized = normalizeStagedItem(raw, gameId);
@@ -296,11 +297,38 @@ async function pushStaged(req, res, mode) {
         );
 
         if (shouldPushManaPool && mongoInventoryItem) {
-          manaPoolResult = await syncInventoryItemsToManaPool(mongoInventoryItem, {
-            livePush: true,
-          });
+          try {
+            manaPoolResult = await syncInventoryItemsToManaPool(mongoInventoryItem, {
+              livePush: true,
+            });
+          } catch (err) {
+            warnings += 1;
+            manaPoolResult = {
+              ok: false,
+              attempted: 1,
+              payloadCount: 0,
+              synced: 0,
+              mongoUpdated: 0,
+              error: err?.message || "ManaPool sync threw after staged push",
+            };
+            console.error("⚠️ ManaPool sync warning after staged push", {
+              inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
+              cardTraderId,
+              message: err?.message || null,
+              response: err?.response?.data || null,
+            });
+          }
 
-          await markManaPoolSyncError(mongoInventoryItem, manaPoolResult);
+          try {
+            await markManaPoolSyncError(mongoInventoryItem, manaPoolResult);
+          } catch (err) {
+            warnings += 1;
+            console.error("⚠️ Failed to record ManaPool sync warning", {
+              inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
+              cardTraderId,
+              message: err?.message || null,
+            });
+          }
         }
 
         created += 1;
@@ -316,24 +344,55 @@ async function pushStaged(req, res, mode) {
           manapool: summarizeManaPoolResult(manaPoolResult),
         });
       } catch (err) {
-        failed += 1;
-        console.error(`❌ staged push failed (${mode})`, {
-          item,
-          cardTraderPayload,
-          status: err?.response?.status,
-          response: err?.response?.data || null,
-          message: err?.message || null,
-        });
+        const hadSuccessfulSideEffect = !!cardTraderId || !!mongoInventoryItem?._id || !!manaPoolResult?.synced;
 
-        results.push({
-          ok: false,
-          mode,
-          game: item.game,
-          blueprintId: item.blueprintId,
-          cardTraderPayload,
-          status: err?.response?.status,
-          error: err?.response?.data || err?.message || "Request failed",
-        });
+        if (hadSuccessfulSideEffect) {
+          created += 1;
+          warnings += 1;
+          console.error(`⚠️ staged push completed with warning (${mode})`, {
+            item,
+            cardTraderPayload,
+            cardTraderId,
+            inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
+            manaPoolResult: summarizeManaPoolResult(manaPoolResult),
+            status: err?.response?.status,
+            response: err?.response?.data || null,
+            message: err?.message || null,
+          });
+
+          results.push({
+            ok: true,
+            warning: true,
+            mode,
+            game: item.game,
+            blueprintId: item.blueprintId,
+            cardTraderId,
+            inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
+            cardtraderPayload,
+            cardtrader: summarizeCardTraderProduct(cardTraderResponse),
+            manapool: summarizeManaPoolResult(manaPoolResult),
+            warningMessage: err?.response?.data || err?.message || "Completed with warning after live side effect",
+          });
+        } else {
+          failed += 1;
+          console.error(`❌ staged push failed (${mode})`, {
+            item,
+            cardTraderPayload,
+            status: err?.response?.status,
+            response: err?.response?.data || null,
+            message: err?.message || null,
+          });
+
+          results.push({
+            ok: false,
+            mode,
+            game: item.game,
+            blueprintId: item.blueprintId,
+            cardTraderPayload,
+            status: err?.response?.status,
+            error: err?.response?.data || err?.message || "Request failed",
+          });
+        }
       }
     }
 
@@ -343,6 +402,7 @@ async function pushStaged(req, res, mode) {
       attempted: items.length,
       created,
       failed,
+      warnings,
       results,
     });
   } catch (err) {

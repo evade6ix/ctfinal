@@ -13,7 +13,13 @@ const MTG_GAME_IDS = new Set(["1"]);
 
 function isMagicGame(game) {
   const normalized = String(game || "").trim().toLowerCase();
-  return MTG_GAME_IDS.has(normalized) || normalized === "magic" || normalized === "mtg";
+  return (
+    MTG_GAME_IDS.has(normalized) ||
+    normalized === "magic" ||
+    normalized === "mtg" ||
+    normalized === "magic: the gathering" ||
+    normalized === "magic the gathering"
+  );
 }
 
 function isKnownNonMagicGame(game) {
@@ -33,20 +39,35 @@ function normalizeCondition(input) {
   const raw = String(input || "").trim().toLowerCase();
 
   if (raw === "m" || raw === "mint") return "Mint";
-  if (raw === "nm" || raw === "near mint") return "Near Mint";
+  if (raw === "nm" || raw === "near mint" || raw === "near_mint") return "Near Mint";
   if (
     raw === "lp" ||
+    raw === "sp" ||
     raw === "lightly played" ||
-    raw === "slightly played"
+    raw === "slightly played" ||
+    raw === "slightly_played"
   ) {
     return "Slightly Played";
   }
-  if (raw === "mp" || raw === "moderately played") return "Moderately Played";
+  if (raw === "mp" || raw === "moderately played" || raw === "moderately_played") return "Moderately Played";
   if (raw === "p" || raw === "played") return "Played";
-  if (raw === "hp" || raw === "heavily played") return "Heavily Played";
+  if (raw === "hp" || raw === "heavily played" || raw === "heavily_played") return "Heavily Played";
   if (raw === "poor") return "Poor";
 
   return "Near Mint";
+}
+
+function normalizeFoil(input) {
+  if (input === true) return true;
+  if (input === false || input == null) return false;
+
+  if (typeof input === "number") return input === 1;
+
+  const raw = String(input).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "foil", "foiled", "isfoil"].includes(raw)) return true;
+  if (["false", "0", "no", "n", "nonfoil", "non-foil", "regular", "normal", "none"].includes(raw)) return false;
+
+  return false;
 }
 
 function normalizeStagedItem(raw, gameId) {
@@ -72,8 +93,8 @@ function normalizeStagedItem(raw, gameId) {
 
   const roundedPrice = Math.round(price * 100) / 100;
   const intQty = Math.floor(qty);
-  const condition = normalizeCondition(raw.condition);
-  const isFoil = !!raw.foil;
+  const condition = normalizeCondition(raw.condition ?? raw.cardCondition ?? raw.properties?.condition);
+  const isFoil = normalizeFoil(raw.foil ?? raw.isFoil ?? raw.mtg_foil ?? raw.properties?.mtg_foil);
 
   return {
     ok: true,
@@ -83,6 +104,8 @@ function normalizeStagedItem(raw, gameId) {
       price: roundedPrice,
       condition,
       isFoil,
+      rawCondition: raw.condition ?? raw.cardCondition ?? raw.properties?.condition ?? null,
+      rawFoil: raw.foil ?? raw.isFoil ?? raw.mtg_foil ?? raw.properties?.mtg_foil ?? null,
       name: raw.name || "Unknown",
       setCode: raw.setCode || "",
       game: raw.gameId || raw.game || gameId || "",
@@ -123,6 +146,16 @@ function summarizeManaPoolResult(manaPoolResult) {
     skippedBeforePush: manaPoolResult.skippedBeforePush,
     skippedByManaPool: manaPoolResult.skippedByManaPool,
     error: manaPoolResult.error || null,
+  };
+}
+
+function summarizeCardTraderProduct(product) {
+  const resource = product?.resource || product || {};
+  return {
+    id: resource?.id ?? product?.id ?? null,
+    blueprintId: resource?.blueprint_id ?? product?.blueprint_id ?? null,
+    properties: resource?.properties || product?.properties || null,
+    propertiesHash: resource?.properties_hash || product?.properties_hash || null,
   };
 }
 
@@ -214,12 +247,27 @@ async function pushStaged(req, res, mode) {
       let cardTraderResponse = null;
       let mongoInventoryItem = null;
       let manaPoolResult = null;
+      let cardTraderPayload = null;
 
       try {
         if (shouldPushCardTrader) {
-          const payload = buildCardTraderPayload(item);
-          const { data } = await api.post("/products", payload);
+          cardTraderPayload = buildCardTraderPayload(item);
+
+          console.log("CT STAGED PUSH PAYLOAD >>>", {
+            mode,
+            blueprintId: item.blueprintId,
+            rawCondition: item.rawCondition,
+            normalizedCondition: item.condition,
+            rawFoil: item.rawFoil,
+            normalizedFoil: item.isFoil,
+            game: item.game,
+            payload: cardTraderPayload,
+          });
+
+          const { data } = await api.post("/products", cardTraderPayload);
           cardTraderResponse = data;
+
+          console.log("CT STAGED PUSH RESPONSE >>>", summarizeCardTraderProduct(data));
 
           const ctProductIdRaw = data?.resource?.id ?? data?.id;
           cardTraderId = Number.isFinite(Number(ctProductIdRaw))
@@ -263,13 +311,15 @@ async function pushStaged(req, res, mode) {
           blueprintId: item.blueprintId,
           cardTraderId,
           inventoryItemId: mongoInventoryItem?._id?.toString?.() || null,
-          cardtrader: cardTraderResponse,
+          cardtraderPayload,
+          cardtrader: summarizeCardTraderProduct(cardTraderResponse),
           manapool: summarizeManaPoolResult(manaPoolResult),
         });
       } catch (err) {
         failed += 1;
         console.error(`❌ staged push failed (${mode})`, {
           item,
+          cardTraderPayload,
           status: err?.response?.status,
           response: err?.response?.data || null,
           message: err?.message || null,
@@ -280,6 +330,7 @@ async function pushStaged(req, res, mode) {
           mode,
           game: item.game,
           blueprintId: item.blueprintId,
+          cardTraderPayload,
           status: err?.response?.status,
           error: err?.response?.data || err?.message || "Request failed",
         });

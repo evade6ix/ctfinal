@@ -13,6 +13,7 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import {
   IconBox,
+  IconCards,
   IconLayoutDashboard,
   IconPackageExport,
   IconSettings,
@@ -24,6 +25,7 @@ import { IconHistory } from "@tabler/icons-react";
 import { InventoryBinsView } from "./components/InventoryBinsView";
 import { CatalogSearchView } from "./components/CatalogSearchView";
 import { InventoryBinAssignmentView } from "./components/InventoryBinAssignmentView";
+import { CardListView } from "./components/CardListView";
 import { CardTraderRepriceView } from "./components/CardTraderRepriceView";
 import { OrdersView } from "./components/OrdersView";
 import { OrdersWeeklyGroupedView } from "./components/OrdersWeeklyGroupedView";
@@ -31,6 +33,7 @@ import { ChangeLogsView } from "./components/ChangeLogView";
 
 type Section =
   | "dashboard"
+  | "card-list"
   | "inventory"
   | "bins"
   | "orders"
@@ -46,6 +49,8 @@ function App() {
   const sectionTitle =
     section === "dashboard"
       ? "CardTrader Catalog"
+      : section === "card-list"
+      ? "Card List"
       : section === "inventory"
       ? "Inventory"
       : section === "bins"
@@ -84,6 +89,7 @@ function App() {
           <Box px="xs" py="sm">
             <Text size="xs" c="dimmed" fw={500} mb={4}>MAIN</Text>
             <NavLink label="Dashboard" description="Search CardTrader catalog" leftSection={<IconLayoutDashboard size={rem(18)} />} active={section === "dashboard"} onClick={() => setSection("dashboard")} />
+            <NavLink label="Card List" description="Browse inventory with images" leftSection={<IconCards size={rem(18)} />} active={section === "card-list"} onClick={() => setSection("card-list")} />
             <NavLink label="Inventory" description="Existing stock & bin locations" leftSection={<IconBox size={rem(18)} />} active={section === "inventory"} onClick={() => setSection("inventory")} />
             <NavLink label="Inventory Bins" description="Your local bin layout" leftSection={<IconBox size={rem(18)} />} active={section === "bins"} onClick={() => setSection("bins")} />
             <NavLink label="CardTrader Repricer" description="Preview and update CT prices" leftSection={<IconRefresh size={rem(18)} />} active={section === "repricer"} onClick={() => setSection("repricer")} />
@@ -102,6 +108,7 @@ function App() {
       <AppShell.Main>
         <Box h="100%" mih="100%">
           {section === "dashboard" && <CatalogSearchView />}
+          {section === "card-list" && <CardListView />}
           {section === "inventory" && <InventoryBinAssignmentView />}
           {section === "bins" && <InventoryBinsView />}
           {section === "repricer" && <CardTraderRepriceView />}

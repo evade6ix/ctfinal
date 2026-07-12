@@ -3,6 +3,7 @@ import {
   Alert,
   Badge,
   Box,
+  Button,
   Card,
   Center,
   Divider,
@@ -25,6 +26,7 @@ import {
   IconCards,
   IconMapPin,
   IconSearch,
+  IconTrash,
 } from "@tabler/icons-react";
 
 type Bin = {
@@ -80,6 +82,15 @@ type CardListResponse = {
     totalSkus: number;
     totalQuantity: number;
     inventoryValue: number;
+  };
+};
+
+type DeleteResponse = {
+  ok?: boolean;
+  error?: string;
+  deleted?: {
+    id: string;
+    name?: string;
   };
 };
 
@@ -144,8 +155,12 @@ export function CardListView() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [reloadKey, setReloadKey] = useState(0);
+
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<CardListItem | null>(null);
 
   useEffect(() => {
@@ -214,7 +229,17 @@ export function CardListView() {
 
     loadCards();
     return () => controller.abort();
-  }, [condition, debouncedQuery, foil, game, page, rarity, setCode, sort]);
+  }, [
+    condition,
+    debouncedQuery,
+    foil,
+    game,
+    page,
+    rarity,
+    reloadKey,
+    setCode,
+    sort,
+  ]);
 
   const conditionOptions = useMemo(
     () => filterOptions.conditions.map((value) => ({ value, label: value })),
@@ -233,6 +258,53 @@ export function CardListView() {
 
   function resetPage() {
     setPage(1);
+  }
+
+  async function deleteSelectedItem() {
+    if (!selectedItem || deleting) return;
+
+    const confirmed = window.confirm(
+      `Permanently delete "${selectedItem.name}" from CTFinal's MongoDB inventory?\n\n` +
+        "This removes the local inventory record and all of its saved bin locations. " +
+        "It does not delete anything from CardTrader or ManaPool."
+    );
+
+    if (!confirmed) return;
+
+    const itemToDelete = selectedItem;
+
+    try {
+      setDeleting(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const response = await fetch(
+        `/api/card-list/${encodeURIComponent(itemToDelete._id)}`,
+        { method: "DELETE" }
+      );
+      const data = (await response.json()) as DeleteResponse;
+
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || "Failed to delete inventory item");
+      }
+
+      setSelectedItem(null);
+      setSuccessMessage(
+        `${itemToDelete.name} was permanently removed from CTFinal's MongoDB inventory.`
+      );
+
+      if (items.length === 1 && page > 1) {
+        setPage((currentPage) => Math.max(1, currentPage - 1));
+      } else {
+        setReloadKey((current) => current + 1);
+      }
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to delete inventory item";
+      setError(message);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -370,6 +442,12 @@ export function CardListView() {
         </Alert>
       )}
 
+      {successMessage && (
+        <Alert color="teal" variant="light" radius="md">
+          {successMessage}
+        </Alert>
+      )}
+
       {loading ? (
         <Center py={80}>
           <Loader />
@@ -455,7 +533,11 @@ export function CardListView() {
                     <Badge size="sm" variant="light" color="gray">
                       {item.rarity || "Rarity —"}
                     </Badge>
-                    <Badge size="sm" variant="light" color={item.isFoil ? "yellow" : "blue"}>
+                    <Badge
+                      size="sm"
+                      variant="light"
+                      color={item.isFoil ? "yellow" : "blue"}
+                    >
                       {item.isFoil ? "Foil" : "Non-foil"}
                     </Badge>
                   </Group>
@@ -494,6 +576,9 @@ export function CardListView() {
         title={selectedItem?.name || "Card details"}
         size="lg"
         centered
+        closeOnClickOutside={!deleting}
+        closeOnEscape={!deleting}
+        withCloseButton={!deleting}
       >
         {selectedItem && (
           <Stack gap="md">
@@ -521,7 +606,10 @@ export function CardListView() {
                   <Badge variant="light">
                     {selectedItem.rarity || "Rarity unavailable"}
                   </Badge>
-                  <Badge variant="light" color={selectedItem.isFoil ? "yellow" : "blue"}>
+                  <Badge
+                    variant="light"
+                    color={selectedItem.isFoil ? "yellow" : "blue"}
+                  >
                     {selectedItem.isFoil ? "Foil" : "Non-foil"}
                   </Badge>
                   <Badge variant="light" color="gray">
@@ -531,25 +619,40 @@ export function CardListView() {
 
                 <SimpleGrid cols={2} spacing="xs" mt="sm">
                   <Paper withBorder radius="md" p="sm">
-                    <Text size="xs" c="dimmed">Price</Text>
+                    <Text size="xs" c="dimmed">
+                      Price
+                    </Text>
                     <Text fw={800}>{money(selectedItem.price)}</Text>
                   </Paper>
                   <Paper withBorder radius="md" p="sm">
-                    <Text size="xs" c="dimmed">Total quantity</Text>
-                    <Text fw={800}>{wholeNumber(selectedItem.totalQuantity)}</Text>
+                    <Text size="xs" c="dimmed">
+                      Total quantity
+                    </Text>
+                    <Text fw={800}>
+                      {wholeNumber(selectedItem.totalQuantity)}
+                    </Text>
                   </Paper>
                   <Paper withBorder radius="md" p="sm">
-                    <Text size="xs" c="dimmed">Assigned</Text>
-                    <Text fw={800}>{wholeNumber(selectedItem.assignedQuantity)}</Text>
+                    <Text size="xs" c="dimmed">
+                      Assigned
+                    </Text>
+                    <Text fw={800}>
+                      {wholeNumber(selectedItem.assignedQuantity)}
+                    </Text>
                   </Paper>
                   <Paper withBorder radius="md" p="sm">
-                    <Text size="xs" c="dimmed">Unassigned</Text>
-                    <Text fw={800}>{wholeNumber(selectedItem.unassignedQuantity)}</Text>
+                    <Text size="xs" c="dimmed">
+                      Unassigned
+                    </Text>
+                    <Text fw={800}>
+                      {wholeNumber(selectedItem.unassignedQuantity)}
+                    </Text>
                   </Paper>
                 </SimpleGrid>
 
                 <Text size="xs" c="dimmed" mt="auto">
-                  CardTrader ID: {selectedItem.cardTraderId || "—"} • Blueprint ID: {selectedItem.blueprintId || "—"}
+                  CardTrader ID: {selectedItem.cardTraderId || "—"} • Blueprint ID:{" "}
+                  {selectedItem.blueprintId || "—"}
                 </Text>
               </Stack>
             </Group>
@@ -596,6 +699,25 @@ export function CardListView() {
                 </Box>
               )}
             </Box>
+
+            <Divider />
+
+            <Group justify="space-between" align="center" wrap="wrap">
+              <Text size="xs" c="dimmed" maw={390}>
+                This permanently removes the local MongoDB inventory record and its
+                bin locations. It does not send a delete request to CardTrader or
+                ManaPool.
+              </Text>
+              <Button
+                color="red"
+                variant="filled"
+                leftSection={<IconTrash size={17} />}
+                loading={deleting}
+                onClick={deleteSelectedItem}
+              >
+                Delete from MongoDB
+              </Button>
+            </Group>
           </Stack>
         )}
       </Modal>

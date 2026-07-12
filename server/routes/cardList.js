@@ -1,8 +1,17 @@
 import express from "express";
+import axios from "axios";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { CatalogSetCache } from "../models/CatalogSetCache.js";
 
 const router = express.Router();
+
+const CT_BASE = "https://api.cardtrader.com/api/v2";
+const TOKEN = process.env.CARDTRADER_TOKEN;
+const EXPANSIONS_CACHE_TTL_MS = 60 * 60 * 1000;
+const BLUEPRINT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+let expansionsCache = { at: 0, data: [] };
+const blueprintsByExpansion = new Map();
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -24,6 +33,74 @@ function compareText(a, b) {
   });
 }
 
+function cardTraderClient() {
+  return axios.create({
+    baseURL: CT_BASE,
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    timeout: 30000,
+  });
+}
+
+function blueprintImageUrl(blueprint) {
+  return cleanText(
+    blueprint?.image_url ||
+      blueprint?.imageUrl ||
+      blueprint?.image ||
+      (Array.isArray(blueprint?.images) ? blueprint.images[0]?.url : "")
+  );
+}
+
+async function getCardTraderExpansions() {
+  const now = Date.now();
+  if (
+    expansionsCache.data.length > 0 &&
+    now - expansionsCache.at < EXPANSIONS_CACHE_TTL_MS
+  ) {
+    return expansionsCache.data;
+  }
+
+  const { data } = await cardTraderClient().get("/expansions");
+  const expansions = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.expansions)
+      ? data.expansions
+      : [];
+
+  expansionsCache = { at: now, data: expansions };
+  return expansions;
+}
+
+async function getExpansionBlueprints(expansionId) {
+  const now = Date.now();
+  const cached = blueprintsByExpansion.get(expansionId);
+
+  if (cached && now - cached.at < BLUEPRINT_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const { data } = await cardTraderClient().get("/blueprints/export", {
+    params: { expansion_id: expansionId },
+  });
+  const blueprints = Array.isArray(data) ? data : [];
+
+  blueprintsByExpansion.set(expansionId, {
+    at: now,
+    data: blueprints,
+  });
+
+  return blueprints;
+}
+
+function findExpansionBySetCode(expansions, setCode) {
+  const wanted = normalizedString(setCode);
+  if (!wanted) return null;
+
+  return (
+    expansions.find((expansion) => normalizedString(expansion?.code) === wanted) ||
+    null
+  );
+}
+
 function buildCatalogMetadataMap(cacheDocs) {
   const metadataByBlueprintId = new Map();
 
@@ -42,9 +119,7 @@ function buildCatalogMetadataMap(cacheDocs) {
         collectorNumber: cleanText(
           blueprint?.collectorNumber || blueprint?.number
         ),
-        imageUrl: cleanText(
-          blueprint?.imageUrl || blueprint?.image_url || blueprint?.image
-        ),
+        imageUrl: blueprintImageUrl(blueprint),
       });
     }
   }
@@ -70,6 +145,76 @@ function buildSetOptions(items) {
 
   return [...byCode.values()].sort((a, b) => compareText(a.label, b.label));
 }
+
+// Missing inventory images are resolved from CardTrader once, saved into Mongo,
+// and then redirected to the original image URL. The browser and server both cache it.
+router.get("/image/:blueprintId", async (req, res) => {
+  try {
+    const blueprintId = Number(req.params.blueprintId);
+    const requestedSetCode = cleanText(req.query.setCode);
+
+    if (!Number.isFinite(blueprintId) || blueprintId <= 0) {
+      return res.status(400).json({ error: "Invalid blueprintId" });
+    }
+
+    const inventoryItem = await InventoryItem.findOne({ blueprintId })
+      .select("imageUrl setCode")
+      .lean();
+
+    const storedImageUrl = cleanText(inventoryItem?.imageUrl);
+    if (storedImageUrl) {
+      res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400");
+      return res.redirect(302, storedImageUrl);
+    }
+
+    if (!TOKEN) {
+      return res.status(404).json({ error: "CardTrader token is not configured" });
+    }
+
+    const setCode = requestedSetCode || cleanText(inventoryItem?.setCode);
+    if (!setCode) {
+      return res.status(404).json({ error: "No set code available for image lookup" });
+    }
+
+    const expansions = await getCardTraderExpansions();
+    const expansion = findExpansionBySetCode(expansions, setCode);
+
+    if (!expansion?.id) {
+      return res.status(404).json({
+        error: "CardTrader expansion not found",
+        setCode,
+      });
+    }
+
+    const blueprints = await getExpansionBlueprints(Number(expansion.id));
+    const blueprint = blueprints.find(
+      (candidate) => Number(candidate?.id) === blueprintId
+    );
+    const imageUrl = blueprintImageUrl(blueprint);
+
+    if (!imageUrl) {
+      return res.status(404).json({
+        error: "Card image not found",
+        blueprintId,
+        setCode,
+      });
+    }
+
+    await InventoryItem.updateMany(
+      { blueprintId },
+      { $set: { imageUrl } }
+    );
+
+    res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400");
+    return res.redirect(302, imageUrl);
+  } catch (err) {
+    console.error("Error resolving card image:", err?.response?.data || err);
+    return res.status(404).json({
+      error: "Failed to resolve card image",
+      details: err?.response?.data || err?.message || String(err),
+    });
+  }
+});
 
 router.get("/", async (req, res) => {
   try {
@@ -138,18 +283,28 @@ router.get("/", async (req, res) => {
         (sum, location) => sum + Math.max(0, finiteNumber(location?.quantity)),
         0
       );
+      const resolvedSetCode = cleanText(item.setCode || metadata?.setCode);
+      const storedOrCachedImage = cleanText(item.imageUrl || metadata?.imageUrl);
+      const fallbackImageUrl =
+        !storedOrCachedImage &&
+        Number.isFinite(blueprintId) &&
+        blueprintId > 0 &&
+        resolvedSetCode
+          ? `/api/card-list/image/${blueprintId}?setCode=${encodeURIComponent(
+              resolvedSetCode
+            )}`
+          : null;
 
       return {
         ...item,
         name: cleanText(item.name || metadata?.name) || "Unknown card",
-        setCode: cleanText(item.setCode || metadata?.setCode),
+        setCode: resolvedSetCode,
         setName: cleanText(item.setName || metadata?.setName),
         rarity: cleanText(item.rarity || metadata?.rarity),
         collectorNumber: cleanText(
           item.collectorNumber || metadata?.collectorNumber
         ),
-        imageUrl:
-          cleanText(item.imageUrl || metadata?.imageUrl) || null,
+        imageUrl: storedOrCachedImage || fallbackImageUrl,
         totalQuantity,
         assignedQuantity,
         unassignedQuantity: Math.max(0, totalQuantity - assignedQuantity),

@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 // Routers
 import binsRouter from "./routes/bins.js";
 import inventoryRouter from "./routes/inventory.js";
+import cardListDeleteRouter from "./routes/cardListDelete.js";
 import cardListRouter from "./routes/cardList.js";
 import cardtraderRouter from "./routes/cardtrader.js";
 import cardtraderWebhooksRouter from "./routes/cardtraderWebhooks.js";
@@ -43,10 +44,10 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-
 // API routes
 app.use("/api/bins", binsRouter);
 app.use("/api/inventory", inventoryRouter);
+app.use("/api/card-list", cardListDeleteRouter);
 app.use("/api/card-list", cardListRouter);
 app.use("/api/ct/webhooks", cardtraderWebhooksRouter);
 app.use("/api/ct/reprice", cardtraderRepriceRouter);

@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 // Routers
 import binsRouter from "./routes/bins.js";
 import inventoryRouter from "./routes/inventory.js";
+import cardListRouter from "./routes/cardList.js";
 import cardtraderRouter from "./routes/cardtrader.js";
 import cardtraderWebhooksRouter from "./routes/cardtraderWebhooks.js";
 import cardtraderRepriceRouter from "./routes/cardtraderReprice.js";
@@ -46,6 +47,7 @@ app.get("/health", (req, res) => {
 // API routes
 app.use("/api/bins", binsRouter);
 app.use("/api/inventory", inventoryRouter);
+app.use("/api/card-list", cardListRouter);
 app.use("/api/ct/webhooks", cardtraderWebhooksRouter);
 app.use("/api/ct/reprice", cardtraderRepriceRouter);
 app.use("/api/ct", cardtraderRouter);
@@ -98,6 +100,7 @@ async function start() {
       console.log("✅ Staged push routes mounted at /api/staged-push");
       console.log("✅ CardTrader webhook routes mounted at /api/ct/webhooks");
       console.log("✅ CardTrader repricer routes mounted at /api/ct/reprice");
+      console.log("✅ Card list route mounted at /api/card-list");
 
       startOrderAutoSyncWorker({
         port: PORT,

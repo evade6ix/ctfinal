@@ -20,6 +20,7 @@ import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
 import cardTraderAllocationReconcileRouter from "./routes/cardTraderAllocationReconcile.js";
 import manualAssignmentDuplicateCleanupRouter from "./routes/manualAssignmentDuplicateCleanup.js";
+import manualAssignmentDiscoveryRouter from "./routes/manualAssignmentDiscovery.js";
 import manualAssignmentsStandaloneRouter from "./routes/manualAssignmentsStandalone.js";
 import manualAssignmentsRouter from "./routes/manualAssignments.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
@@ -66,6 +67,7 @@ app.use("/api/orders-weekly", weeklyOrdersRouter);
 // are safely retried and converted into real bin allocations.
 app.use("/api/order-allocations", cardTraderAllocationReconcileRouter);
 app.use("/api/manual-assignments", manualAssignmentDuplicateCleanupRouter);
+app.use("/api/manual-assignments", manualAssignmentDiscoveryRouter);
 app.use("/api/manual-assignments", manualAssignmentsStandaloneRouter);
 app.use("/api/manual-assignments", manualAssignmentsRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);

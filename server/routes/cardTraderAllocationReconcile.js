@@ -119,6 +119,11 @@ async function syncManaPool(inventoryItemId, context) {
       inventoryItem.manapool = inventoryItem.manapool || {};
       inventoryItem.manapool.lastSyncError = JSON.stringify({ ...context, result });
       await inventoryItem.save();
+      return {
+        ...result,
+        ok: false,
+        error: result?.error || "manapool_sync_incomplete",
+      };
     }
 
     return result;
@@ -284,6 +289,7 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
           };
         });
       } catch (error) {
+        outcome = null;
         result.failed++;
         result.failures.push({
           orderItemId,

@@ -28,7 +28,7 @@ function productId(data) {
   return product?.id ?? data?.id ?? null;
 }
 
-async function fetchProductById(api, cardTraderId) {
+async function fetchProductById(api, cardTraderId, options = {}) {
   let directError = null;
 
   try {
@@ -54,6 +54,10 @@ async function fetchProductById(api, cardTraderId) {
   );
 
   if (!product) {
+    if (options.missingAsZero === true) {
+      return { product: null, quantity: 0, source: "missing" };
+    }
+
     const error = new Error("cardtrader_listing_not_found");
     error.cause = directError;
     throw error;
@@ -112,7 +116,8 @@ export async function syncCardTraderListingQuantity(cardTraderId, context = {}) 
     }
 
     const api = ct();
-    const before = await fetchProductById(api, numericId);
+    const missingAsZero = desired.desiredQuantity === 0;
+    const before = await fetchProductById(api, numericId, { missingAsZero });
 
     if (before.quantity === desired.desiredQuantity) {
       return {
@@ -132,7 +137,7 @@ export async function syncCardTraderListingQuantity(cardTraderId, context = {}) 
       quantity: desired.desiredQuantity,
     });
 
-    const after = await fetchProductById(api, numericId);
+    const after = await fetchProductById(api, numericId, { missingAsZero });
     const verified = after.quantity === desired.desiredQuantity;
 
     return {

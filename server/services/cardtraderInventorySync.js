@@ -133,7 +133,7 @@ export async function syncCardTraderListingQuantity(cardTraderId, context = {}) 
       };
     }
 
-    await api.put(`/products/${numericId}`, {
+    const updateResponse = await api.put(`/products/${numericId}`, {
       quantity: desired.desiredQuantity,
     });
 
@@ -150,6 +150,7 @@ export async function syncCardTraderListingQuantity(cardTraderId, context = {}) 
       desiredQuantity: desired.desiredQuantity,
       inventoryItemIds: desired.inventoryItemIds,
       lookupSource: after.source,
+      response: updateResponse?.data || null,
       error: verified ? null : "cardtrader_quantity_verification_failed",
     };
   } catch (error) {
@@ -210,8 +211,12 @@ export async function syncInventoryItemToCardTrader(inventoryItem, options = {})
   if (!inventoryItemId) {
     return {
       ok: false,
+      livePush: options.livePush !== false,
       attempted: 0,
       synced: 0,
+      method: null,
+      response: null,
+      skipped: [{ reason: "Missing inventoryItem" }],
       error: "missing_inventory_item",
     };
   }
@@ -227,6 +232,12 @@ export async function syncInventoryItemToCardTrader(inventoryItem, options = {})
       livePush: false,
       attempted: 1,
       synced: 0,
+      method: null,
+      response: {
+        dryRun: true,
+        quantity: desired.desiredQuantity,
+      },
+      skipped: desired.error ? [{ reason: desired.error }] : [],
       cardTraderId: Number.isFinite(cardTraderId) ? cardTraderId : null,
       quantity: desired.desiredQuantity,
       inventoryItemIds: desired.inventoryItemIds,
@@ -245,6 +256,9 @@ export async function syncInventoryItemToCardTrader(inventoryItem, options = {})
     livePush: true,
     attempted: 1,
     synced: result.ok ? 1 : 0,
+    method: result.updated ? "PUT" : result.ok ? "CHECK" : null,
+    response: result.response || null,
+    skipped: result.ok ? [] : [{ reason: result.error || "CardTrader sync failed" }],
     quantity: result.desiredQuantity ?? null,
   };
 }

@@ -5,6 +5,7 @@ import { OrderAllocation } from "../models/OrderAllocation.js";
 const router = express.Router();
 const DISCOVERY_TTL_MS = 5_000;
 const MAX_ORDER_PAGES = 200;
+const AUTO_LOCK_TTL_MS = 10 * 60 * 1000;
 
 let lastDiscoveryAt = 0;
 let lastDiscoveryResult = null;
@@ -37,93 +38,8 @@ function orderItemIdOf(item) {
   );
 }
 
-function cardTraderIdOf(item) {
-  return finite(
-    item?.product_id,
-    item?.productId,
-    item?.cardTraderId,
-    item?.card_trader_id,
-    item?.seller_product_id,
-    item?.article?.product_id,
-    item?.article?.id,
-    item?.product?.id,
-    item?.product?.product_id
-  );
-}
-
 function quantityOf(item) {
   return finite(item?.quantity, item?.qty, item?.amount) || 0;
-}
-
-function nameOf(item) {
-  return String(item?.name || item?.product?.name || "Unknown item").trim();
-}
-
-function conditionOf(item) {
-  return (
-    item?.condition ||
-    item?.card_condition ||
-    item?.attributes?.condition ||
-    item?.properties?.condition ||
-    item?.properties_hash?.condition ||
-    item?.properties_hash?.card_condition ||
-    null
-  );
-}
-
-function truthyFoil(value) {
-  if (value === true || value === 1) return true;
-
-  const normalized = String(value || "").trim().toLowerCase();
-  if (
-    !normalized ||
-    normalized.includes("nonfoil") ||
-    normalized.includes("non-foil") ||
-    normalized.includes("non foil") ||
-    ["false", "0", "no", "regular", "standard"].includes(normalized)
-  ) {
-    return false;
-  }
-
-  return ["true", "1", "yes", "foil", "foiled"].includes(normalized);
-}
-
-function explicitFoilOf(item) {
-  const values = [
-    item?.isFoil,
-    item?.is_foil,
-    item?.foil,
-    item?.properties?.mtg_foil,
-    item?.properties?.foil,
-    item?.properties_hash?.mtg_foil,
-  ];
-
-  for (const value of values) {
-    if (value !== undefined && value !== null && value !== "") {
-      return truthyFoil(value);
-    }
-  }
-
-  return null;
-}
-
-function textSaysFoil(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return false;
-  if (
-    normalized.includes("nonfoil") ||
-    normalized.includes("non-foil") ||
-    normalized.includes("non foil")
-  ) {
-    return false;
-  }
-  return /(^|[^a-z])foil(?:ed)?([^a-z]|$)/.test(normalized);
-}
-
-function foilOf(item) {
-  const explicit = explicitFoilOf(item);
-  if (explicit !== null) return explicit;
-  return textSaysFoil(item?.variant) || textSaysFoil(item?.description);
 }
 
 function isActiveZeroOrder(order) {
@@ -131,6 +47,78 @@ function isActiveZeroOrder(order) {
   const isZero =
     order?.via_cardtrader_zero === true || order?.viaCardTraderZero === true;
   return isZero && state === "hub_pending";
+}
+
+function getOrderCreatedAt(order) {
+  const items = rawItems(order);
+  const itemCreatedAt = items[0]?.created_at || items[0]?.createdAt || null;
+  if (itemCreatedAt) return itemCreatedAt;
+
+  const code = String(order?.code || "");
+  if (/^\d{8}/.test(code)) {
+    return `${code.slice(0, 4)}-${code.slice(4, 6)}-${code.slice(
+      6,
+      8
+    )}T00:00:00.000Z`;
+  }
+
+  return order?.created_at || order?.createdAt || null;
+}
+
+function getTorontoStartOfToday() {
+  const torontoNow = new Date(
+    new Date().toLocaleString("en-CA", {
+      timeZone: "America/Toronto",
+    })
+  );
+  torontoNow.setHours(0, 0, 0, 0);
+  return torontoNow;
+}
+
+function getOrderSyncCutoff() {
+  const raw = process.env.ORDER_SYNC_CUTOFF;
+  if (!raw) return getTorontoStartOfToday();
+
+  const cutoff = new Date(raw);
+  if (Number.isNaN(cutoff.getTime())) {
+    console.warn(
+      "⚠️ [MANUAL ASSIGNMENTS] Invalid ORDER_SYNC_CUTOFF; using today",
+      raw
+    );
+    return getTorontoStartOfToday();
+  }
+
+  return cutoff;
+}
+
+function isAfterCutoff(order, cutoff) {
+  const rawCreatedAt = getOrderCreatedAt(order);
+  if (!rawCreatedAt) return false;
+
+  const createdAt = new Date(rawCreatedAt);
+  return !Number.isNaN(createdAt.getTime()) && createdAt >= cutoff;
+}
+
+function isRetryableManualReview(allocation) {
+  if (!allocation) return true;
+
+  const emptyManualReview =
+    allocation.status === "manual_review" &&
+    Number(allocation.fulfilledQuantity || 0) === 0 &&
+    (!Array.isArray(allocation.pickedLocations) ||
+      allocation.pickedLocations.length === 0) &&
+    allocation.picked !== true;
+
+  if (emptyManualReview) return true;
+
+  const staleAutoLock =
+    allocation.status === "manual_review" &&
+    allocation.picked === true &&
+    String(allocation.pickedBy || "").startsWith("AutoAllocationLock:") &&
+    (!allocation.pickedAt ||
+      Date.now() - new Date(allocation.pickedAt).getTime() > AUTO_LOCK_TTL_MS);
+
+  return staleAutoLock;
 }
 
 async function fetchAllSellerOrders(client) {
@@ -158,9 +146,7 @@ async function fetchAllSellerOrders(client) {
 
 async function ensureOrderItems(client, order) {
   const listedItems = rawItems(order);
-  if (listedItems.length > 0) {
-    return { order, items: listedItems };
-  }
+  if (listedItems.length > 0) return { order, items: listedItems };
 
   const orderId = order?.id;
   if (orderId == null) return { order, items: [] };
@@ -170,136 +156,142 @@ async function ensureOrderItems(client, order) {
   return { order: detailedOrder, items: rawItems(detailedOrder) };
 }
 
-async function discoverMissingAllocations() {
+async function reconcileOrder(orderId) {
+  const baseUrl =
+    process.env.INTERNAL_API_BASE_URL ||
+    `http://127.0.0.1:${process.env.PORT || 3000}`;
+  const response = await fetch(
+    `${baseUrl}/api/order-allocations/reconcile-order/${orderId}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  const raw = await response.text().catch(() => "");
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = { raw: raw.slice(0, 500) };
+  }
+
+  if (!response.ok) {
+    const error = new Error(
+      body?.details || body?.error || `reconcile_failed_${response.status}`
+    );
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+
+  return body;
+}
+
+async function discoverAndReconcile() {
   const client = ct();
+  const cutoff = getOrderSyncCutoff();
   const sellerOrders = await fetchAllSellerOrders(client);
-  const activeOrders = sellerOrders.filter(isActiveZeroOrder);
+  const activeOrders = sellerOrders.filter(
+    (order) => isActiveZeroOrder(order) && isAfterCutoff(order, cutoff)
+  );
   const activeOrderIds = activeOrders
     .map((order) => (order?.id == null ? null : String(order.id)))
     .filter(Boolean);
 
   const existing = activeOrderIds.length
     ? await OrderAllocation.find({ orderId: { $in: activeOrderIds } })
-        .select("orderId orderItemId")
+        .select(
+          "orderId orderItemId status fulfilledQuantity pickedLocations picked pickedAt pickedBy"
+        )
         .lean()
     : [];
 
-  const existingKeys = new Set(
+  const allocationByLine = new Map(
     existing
       .filter((allocation) => allocation?.orderItemId != null)
-      .map(
-        (allocation) =>
-          `${String(allocation.orderId)}:${Number(allocation.orderItemId)}`
-      )
+      .map((allocation) => [
+        `${String(allocation.orderId)}:${Number(allocation.orderItemId)}`,
+        allocation,
+      ])
   );
 
   let discoveredLines = 0;
-  let createdManualReviews = 0;
-  let skippedExisting = 0;
+  let ordersNeedingReconcile = 0;
+  let reconciledOrders = 0;
+  let alreadyResolvedOrders = 0;
   let skippedInvalid = 0;
+  const results = [];
   const failures = [];
 
   for (const listedOrder of activeOrders) {
     try {
       const { order, items } = await ensureOrderItems(client, listedOrder);
       const orderId = order?.id == null ? null : String(order.id);
-      const orderCode = order?.code ? String(order.code) : null;
 
       if (!orderId) {
         skippedInvalid += items.length || 1;
         continue;
       }
 
+      let needsReconcile = false;
+
       for (const item of items) {
         discoveredLines += 1;
-
         const orderItemId = orderItemIdOf(item);
         const quantity = quantityOf(item);
-        const cardTraderId = cardTraderIdOf(item);
 
         if (!Number.isFinite(orderItemId) || quantity <= 0) {
           skippedInvalid += 1;
           continue;
         }
 
-        const key = `${orderId}:${Number(orderItemId)}`;
-        if (existingKeys.has(key)) {
-          skippedExisting += 1;
-          continue;
-        }
-
-        const payload = {
-          source: "cardtrader",
-          inventoryItemId: null,
-          orderId,
-          orderCode,
-          orderItemId: Number(orderItemId),
-          cardTraderId: Number.isFinite(cardTraderId)
-            ? Number(cardTraderId)
-            : null,
-          requestedQuantity: quantity,
-          fulfilledQuantity: 0,
-          unfilled: quantity,
-          name: nameOf(item),
-          condition: conditionOf(item),
-          isFoil: foilOf(item),
-          pickedLocations: [],
-          picked: false,
-          pickedAt: null,
-          pickedBy: null,
-          status: "manual_review",
-          failureReason:
-            "missing_allocation_record_discovered_from_active_zero_order",
-          allocationMethod: "automatic",
-        };
-
-        try {
-          const result = await OrderAllocation.updateOne(
-            {
-              source: "cardtrader",
-              orderId,
-              orderItemId: Number(orderItemId),
-            },
-            { $setOnInsert: payload },
-            { upsert: true }
-          );
-
-          if (result.upsertedCount > 0) createdManualReviews += 1;
-          else skippedExisting += 1;
-          existingKeys.add(key);
-        } catch (error) {
-          if (error?.code === 11000) {
-            skippedExisting += 1;
-            existingKeys.add(key);
-            continue;
-          }
-
-          failures.push({
-            orderId,
-            orderItemId,
-            error: error?.message || String(error),
-          });
-        }
+        const allocation = allocationByLine.get(
+          `${orderId}:${Number(orderItemId)}`
+        );
+        if (isRetryableManualReview(allocation)) needsReconcile = true;
       }
+
+      if (!needsReconcile) {
+        alreadyResolvedOrders += 1;
+        continue;
+      }
+
+      ordersNeedingReconcile += 1;
+      const result = await reconcileOrder(orderId);
+      reconciledOrders += 1;
+      results.push({ orderId, result });
     } catch (error) {
       failures.push({
-        orderId: listedOrder?.id == null ? null : String(listedOrder.id),
-        error: error?.response?.data || error?.message || String(error),
+        orderId:
+          listedOrder?.id == null ? null : String(listedOrder.id),
+        status: error?.status || error?.response?.status || null,
+        error:
+          error?.body ||
+          error?.response?.data ||
+          error?.message ||
+          String(error),
       });
     }
   }
 
   const result = {
+    cutoff: cutoff.toISOString(),
     activeOrders: activeOrders.length,
     discoveredLines,
-    createdManualReviews,
-    skippedExisting,
+    ordersNeedingReconcile,
+    reconciledOrders,
+    alreadyResolvedOrders,
     skippedInvalid,
+    results,
     failures,
   };
 
-  if (createdManualReviews > 0 || failures.length > 0) {
-    console.log("🔎 [MANUAL ASSIGNMENTS] Missing-line discovery", result);
+  if (ordersNeedingReconcile > 0 || failures.length > 0) {
+    console.log(
+      "🔎 [MANUAL ASSIGNMENTS] Automatic reconciliation before exception list",
+      result
+    );
   }
 
   return result;
@@ -312,7 +304,7 @@ async function runDiscovery() {
   }
 
   if (!discoveryInFlight) {
-    discoveryInFlight = discoverMissingAllocations()
+    discoveryInFlight = discoverAndReconcile()
       .then((result) => {
         lastDiscoveryAt = Date.now();
         lastDiscoveryResult = result;
@@ -326,16 +318,19 @@ async function runDiscovery() {
   return discoveryInFlight;
 }
 
-// The existing manual-assignment GET route runs after this middleware. This
-// middleware only materializes missing active Zero lines as empty manual-review
-// records so the existing UI and assignment safety checks can handle them.
+// The exception page never creates manual-review records directly. It first
+// runs the same automatic reconciliation used by normal sales, then the next
+// list middleware returns only the lines that still genuinely need attention.
 router.get("/", async (req, _res, next) => {
   try {
     req.manualAssignmentDiscovery = await runDiscovery();
   } catch (error) {
-    console.warn("⚠️ [MANUAL ASSIGNMENTS] Missing-line discovery failed", {
-      error: error?.response?.data || error?.message || String(error),
-    });
+    console.warn(
+      "⚠️ [MANUAL ASSIGNMENTS] Automatic pre-list reconciliation failed",
+      {
+        error: error?.response?.data || error?.message || String(error),
+      }
+    );
   }
 
   return next();

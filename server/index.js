@@ -22,6 +22,7 @@ import cardTraderAllocationReconcileRouter from "./routes/cardTraderAllocationRe
 import manualAssignmentDuplicateCleanupRouter from "./routes/manualAssignmentDuplicateCleanup.js";
 import manualAssignmentDiscoveryRouter from "./routes/manualAssignmentDiscovery.js";
 import manualAssignmentsStandaloneRouter from "./routes/manualAssignmentsStandalone.js";
+import manualAssignmentsListCompatRouter from "./routes/manualAssignmentsListCompat.js";
 import manualAssignmentsRouter from "./routes/manualAssignments.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
 import manapoolRouter from "./routes/manapool.js";
@@ -69,6 +70,7 @@ app.use("/api/order-allocations", cardTraderAllocationReconcileRouter);
 app.use("/api/manual-assignments", manualAssignmentDuplicateCleanupRouter);
 app.use("/api/manual-assignments", manualAssignmentDiscoveryRouter);
 app.use("/api/manual-assignments", manualAssignmentsStandaloneRouter);
+app.use("/api/manual-assignments", manualAssignmentsListCompatRouter);
 app.use("/api/manual-assignments", manualAssignmentsRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
 app.use("/api/staged-push", stagedPushRouter);

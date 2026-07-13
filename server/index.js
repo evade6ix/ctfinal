@@ -19,6 +19,8 @@ import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
 import cardTraderAllocationReconcileRouter from "./routes/cardTraderAllocationReconcile.js";
+import manualAssignmentDuplicateCleanupRouter from "./routes/manualAssignmentDuplicateCleanup.js";
+import manualAssignmentsRouter from "./routes/manualAssignments.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
 import manapoolRouter from "./routes/manapool.js";
 import stagedPushRouter from "./routes/stagedPush.js";
@@ -62,6 +64,8 @@ app.use("/api/orders-weekly", weeklyOrdersRouter);
 // Must be mounted before the legacy router so empty manual-review allocations
 // are safely retried and converted into real bin allocations.
 app.use("/api/order-allocations", cardTraderAllocationReconcileRouter);
+app.use("/api/manual-assignments", manualAssignmentDuplicateCleanupRouter);
+app.use("/api/manual-assignments", manualAssignmentsRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
 app.use("/api/staged-push", stagedPushRouter);
 
@@ -109,6 +113,9 @@ async function start() {
       console.log("✅ Card list route mounted at /api/card-list");
       console.log(
         "✅ Safe CardTrader allocation retry mounted at /api/order-allocations/reconcile-order/:orderId"
+      );
+      console.log(
+        "✅ Manual Card List assignment route mounted at /api/manual-assignments"
       );
 
       startOrderAutoSyncWorker({

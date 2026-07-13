@@ -68,7 +68,7 @@ const orderAllocationSchema = new mongoose.Schema(
       index: true,
     },
 
-        // Sold CardTrader listing/product ID from the order line when known.
+    // Sold CardTrader listing/product ID from the order line when known.
     // ManaPool manual-review allocations may not have this yet.
     cardTraderId: {
       type: Number,
@@ -125,6 +125,29 @@ const orderAllocationSchema = new mongoose.Schema(
     },
 
     failureReason: {
+      type: String,
+      default: null,
+    },
+
+    allocationMethod: {
+      type: String,
+      enum: ["automatic", "manual_card_list"],
+      default: "automatic",
+      index: true,
+    },
+
+    manualInventoryItemIds: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "InventoryItem",
+      default: [],
+    },
+
+    manuallyAssignedAt: {
+      type: Date,
+      default: null,
+    },
+
+    manuallyAssignedBy: {
       type: String,
       default: null,
     },

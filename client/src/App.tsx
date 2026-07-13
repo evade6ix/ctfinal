@@ -12,6 +12,7 @@ import {
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import {
+  IconAlertTriangle,
   IconBox,
   IconCards,
   IconLayoutDashboard,
@@ -30,6 +31,7 @@ import { CardTraderRepriceView } from "./components/CardTraderRepriceView";
 import { OrdersView } from "./components/OrdersView";
 import { OrdersWeeklyGroupedView } from "./components/OrdersWeeklyGroupedView";
 import { ChangeLogsView } from "./components/ChangeLogView";
+import { ManualAssignmentsView } from "./components/ManualAssignmentsView";
 
 type Section =
   | "dashboard"
@@ -37,6 +39,7 @@ type Section =
   | "inventory"
   | "bins"
   | "orders"
+  | "manual-assignments"
   | "orders-weekly"
   | "repricer"
   | "changelogs"
@@ -57,6 +60,8 @@ function App() {
       ? "Inventory Bins"
       : section === "orders"
       ? "Orders"
+      : section === "manual-assignments"
+      ? "Unassigned Order Lines"
       : section === "orders-weekly"
       ? "Weekly Shipments"
       : section === "repricer"
@@ -99,6 +104,7 @@ function App() {
           <Box px="xs" py="sm">
             <Text size="xs" c="dimmed" fw={500} mb={4}>WORKFLOW</Text>
             <NavLink label="Orders" description="Individual CardTrader orders" leftSection={<IconPackageExport size={rem(18)} />} active={section === "orders"} onClick={() => setSection("orders")} />
+            <NavLink label="Unassigned Order Lines" description="Assign Card List stock to manual-review orders" leftSection={<IconAlertTriangle size={rem(18)} />} active={section === "manual-assignments"} onClick={() => setSection("manual-assignments")} />
             <NavLink label="CardTrader Zero weekly shipments" description="Grouped Wednesday → Tuesday view" leftSection={<IconPackageExport size={rem(18)} />} active={section === "orders-weekly"} onClick={() => setSection("orders-weekly")} />
             <NavLink label="Settings" description="API keys, preferences" leftSection={<IconSettings size={rem(18)} />} active={section === "settings"} onClick={() => setSection("settings")} />
           </Box>
@@ -113,6 +119,7 @@ function App() {
           {section === "bins" && <InventoryBinsView />}
           {section === "repricer" && <CardTraderRepriceView />}
           {section === "orders" && <OrdersView />}
+          {section === "manual-assignments" && <ManualAssignmentsView />}
           {section === "orders-weekly" && <OrdersWeeklyGroupedView />}
           {section === "changelogs" && <ChangeLogsView />}
           {section === "settings" && (

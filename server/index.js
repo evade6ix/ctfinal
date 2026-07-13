@@ -18,6 +18,7 @@ import orderArticlesRouter from "./routes/orderArticles.js";
 import changelogRouter from "./routes/changelog.js";
 import catalogRouter from "./routes/catalog.js";
 import weeklyOrdersRouter from "./routes/orders-weekly.js";
+import cardTraderAllocationStandaloneRouter from "./routes/cardTraderAllocationStandalone.js";
 import cardTraderAllocationReconcileRouter from "./routes/cardTraderAllocationReconcile.js";
 import manualAssignmentDuplicateCleanupRouter from "./routes/manualAssignmentDuplicateCleanup.js";
 import manualAssignmentDiscoveryRouter from "./routes/manualAssignmentDiscovery.js";
@@ -65,8 +66,10 @@ app.use("/api/changelog", changelogRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/orders-weekly", weeklyOrdersRouter);
 
-// Must be mounted before the legacy router so empty manual-review allocations
-// are safely retried and converted into real bin allocations.
+// Automatic CardTrader allocation must work on both Mongo topologies.
+// Standalone Mongo is handled first; replica-set/sharded databases fall through
+// to the transaction-backed enhanced allocator.
+app.use("/api/order-allocations", cardTraderAllocationStandaloneRouter);
 app.use("/api/order-allocations", cardTraderAllocationReconcileRouter);
 app.use("/api/manual-assignments", manualAssignmentDuplicateCleanupRouter);
 app.use("/api/manual-assignments", manualAssignmentDiscoveryRouter);
@@ -120,7 +123,7 @@ async function start() {
       console.log("✅ CardTrader repricer routes mounted at /api/ct/reprice");
       console.log("✅ Card list route mounted at /api/card-list");
       console.log(
-        "✅ Safe CardTrader allocation retry mounted at /api/order-allocations/reconcile-order/:orderId"
+        "✅ Automatic CardTrader allocation mounted at /api/order-allocations/reconcile-order/:orderId"
       );
       console.log(
         "✅ Manual Card List assignment route mounted at /api/manual-assignments"

@@ -7,16 +7,17 @@ function sourceFilter() {
   return { $or: [{ source: "cardtrader" }, { source: { $exists: false } }] };
 }
 
-// Compatibility list for all empty CardTrader manual-review records. Older
-// records may have fulfilledQuantity or pickedLocations missing/null, so the
-// original exact `fulfilledQuantity: 0` query could hide a visibly unassigned
-// Daily Sales line from the rescue screen.
+// Compatibility list for genuinely unresolved CardTrader manual-review records.
+// Older records may have fulfilledQuantity or pickedLocations missing/null.
+// Temporary automatic/manual allocation locks set picked=true, so those active
+// lines are excluded until processing completes.
 router.get("/", async (_req, res) => {
   try {
     const docs = await OrderAllocation.find({
       $and: [
         sourceFilter(),
         { status: "manual_review" },
+        { picked: { $ne: true } },
         {
           $or: [
             { fulfilledQuantity: 0 },

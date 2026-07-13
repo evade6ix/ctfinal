@@ -1,143 +1,264 @@
 import { ct } from "../ctClient.js";
+import { InventoryItem } from "../models/InventoryItem.js";
 
-function getQuantity(item) {
-  if (!item) return 0;
-
-  if (typeof item.totalQuantity === "number") {
-    return Math.max(0, item.totalQuantity);
-  }
-
-  if (Array.isArray(item.locations)) {
-    return item.locations.reduce((sum, loc) => {
-      const qty = typeof loc.quantity === "number" ? loc.quantity : 0;
-      return sum + Math.max(0, qty);
-    }, 0);
-  }
-
-  if (typeof item.quantity === "number") {
-    return Math.max(0, item.quantity);
-  }
-
-  return 0;
+function finiteQuantity(value) {
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? Math.max(0, Math.floor(quantity)) : null;
 }
 
-function getCardTraderUpdateMethods() {
-  const preferred = String(process.env.CARDTRADER_UPDATE_METHOD || "")
-    .trim()
-    .toLowerCase();
-
-  if (preferred === "put") return ["put"];
-  if (preferred === "patch") return ["patch"];
-
-  // Try PATCH first, then PUT as fallback.
-  // CardTrader create/list routes already use /products.
-  return ["patch", "put"];
+function unwrapProduct(data) {
+  if (!data) return null;
+  if (data.resource) return data.resource;
+  if (data.product) return data.product;
+  return data;
 }
 
-export async function syncInventoryItemToCardTrader(inventoryItem, options = {}) {
-  const livePush = options.livePush !== false;
+function productQuantity(data) {
+  const product = unwrapProduct(data);
+  return finiteQuantity(
+    product?.quantity ??
+      product?.stock ??
+      product?.available ??
+      product?.available_quantity
+  );
+}
 
-  const cardTraderId = Number(inventoryItem?.cardTraderId);
-  const quantity = getQuantity(inventoryItem);
+function productId(data) {
+  const product = unwrapProduct(data);
+  return product?.id ?? data?.id ?? null;
+}
 
-  const result = {
-    ok: true,
-    livePush,
-    attempted: inventoryItem ? 1 : 0,
-    cardTraderId: Number.isFinite(cardTraderId) ? cardTraderId : null,
-    quantity,
-    synced: 0,
-    method: null,
-    response: null,
-    skipped: [],
+async function fetchProductById(api, cardTraderId, options = {}) {
+  let directError = null;
+
+  try {
+    const { data } = await api.get(`/products/${cardTraderId}`);
+    const quantity = productQuantity(data);
+    if (quantity !== null) {
+      return { product: unwrapProduct(data), quantity, source: "product" };
+    }
+  } catch (error) {
+    directError = error;
+    const status = Number(error?.response?.status || 0);
+    if (status && ![404, 405].includes(status)) throw error;
+  }
+
+  const { data } = await api.get("/products/export");
+  const products = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.products)
+      ? data.products
+      : [];
+  const product = products.find(
+    (candidate) => String(productId(candidate)) === String(cardTraderId)
+  );
+
+  if (!product) {
+    if (options.missingAsZero === true) {
+      return { product: null, quantity: 0, source: "missing" };
+    }
+
+    const error = new Error("cardtrader_listing_not_found");
+    error.cause = directError;
+    throw error;
+  }
+
+  const quantity = productQuantity(product);
+  if (quantity === null) throw new Error("cardtrader_listing_quantity_missing");
+  return { product, quantity, source: "export" };
+}
+
+async function desiredQuantityForListing(cardTraderId) {
+  const matching = await InventoryItem.find({ cardTraderId })
+    .select("_id totalQuantity")
+    .lean();
+
+  if (!matching.length) {
+    return {
+      desiredQuantity: null,
+      inventoryItemIds: [],
+      error: "no_mongo_inventory_for_cardtrader_listing",
+    };
+  }
+
+  const desiredQuantity = matching.reduce(
+    (sum, item) => sum + Math.max(0, Number(item?.totalQuantity || 0)),
+    0
+  );
+
+  return {
+    desiredQuantity: Math.max(0, Math.floor(desiredQuantity)),
+    inventoryItemIds: matching.map((item) => item._id.toString()),
     error: null,
   };
+}
 
-  if (!inventoryItem) {
-    result.ok = false;
-    result.skipped.push({ reason: "Missing inventoryItem" });
-    return result;
+export async function syncCardTraderListingQuantity(cardTraderId, context = {}) {
+  const numericId = Number(cardTraderId);
+  if (!Number.isFinite(numericId) || numericId <= 0) {
+    return {
+      ok: false,
+      cardTraderId: cardTraderId ?? null,
+      error: "invalid_cardtrader_id",
+      context,
+    };
   }
 
-  if (!Number.isFinite(cardTraderId) || cardTraderId <= 0) {
-    result.ok = false;
-    result.skipped.push({
-      reason: "Missing/invalid cardTraderId",
-      inventoryItemId: inventoryItem._id?.toString?.() || null,
+  try {
+    const desired = await desiredQuantityForListing(numericId);
+    if (desired.error) {
+      return {
+        ok: false,
+        cardTraderId: numericId,
+        error: desired.error,
+        context,
+      };
+    }
+
+    const api = ct();
+    const missingAsZero = desired.desiredQuantity === 0;
+    const before = await fetchProductById(api, numericId, { missingAsZero });
+
+    if (before.quantity === desired.desiredQuantity) {
+      return {
+        ok: true,
+        cardTraderId: numericId,
+        checked: true,
+        updated: false,
+        quantityBefore: before.quantity,
+        quantityAfter: before.quantity,
+        desiredQuantity: desired.desiredQuantity,
+        inventoryItemIds: desired.inventoryItemIds,
+        lookupSource: before.source,
+      };
+    }
+
+    const updateResponse = await api.put(`/products/${numericId}`, {
+      quantity: desired.desiredQuantity,
     });
-    return result;
-  }
 
-  if (!Number.isInteger(quantity) || quantity < 0) {
-    result.ok = false;
-    result.skipped.push({
-      reason: "Invalid quantity",
-      quantity,
-      inventoryItemId: inventoryItem._id?.toString?.() || null,
-      cardTraderId,
+    const after = await fetchProductById(api, numericId, { missingAsZero });
+    const verified = after.quantity === desired.desiredQuantity;
+
+    return {
+      ok: verified,
+      cardTraderId: numericId,
+      checked: true,
+      updated: true,
+      quantityBefore: before.quantity,
+      quantityAfter: after.quantity,
+      desiredQuantity: desired.desiredQuantity,
+      inventoryItemIds: desired.inventoryItemIds,
+      lookupSource: after.source,
+      response: updateResponse?.data || null,
+      error: verified ? null : "cardtrader_quantity_verification_failed",
+    };
+  } catch (error) {
+    console.error("❌ CardTrader quantity reconciliation failed", {
+      cardTraderId: numericId,
+      context,
+      status: error?.response?.status || null,
+      response: error?.response?.data || null,
+      error: error?.message || String(error),
     });
-    return result;
+
+    return {
+      ok: false,
+      cardTraderId: numericId,
+      checked: false,
+      updated: false,
+      error: error?.response?.data || error?.message || String(error),
+      context,
+    };
+  }
+}
+
+export async function syncInventoryItemIdsToCardTrader(inventoryItemIds, context = {}) {
+  const ids = [...new Set((inventoryItemIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return [];
+
+  const items = await InventoryItem.find({ _id: { $in: ids } })
+    .select("_id cardTraderId")
+    .lean();
+
+  const results = [];
+  const cardTraderIds = new Set();
+
+  for (const item of items) {
+    const cardTraderId = Number(item?.cardTraderId);
+    if (!Number.isFinite(cardTraderId) || cardTraderId <= 0) {
+      results.push({
+        ok: false,
+        inventoryItemId: item._id.toString(),
+        cardTraderId: item?.cardTraderId ?? null,
+        error: "inventory_item_has_no_cardtrader_listing_id",
+      });
+      continue;
+    }
+    cardTraderIds.add(cardTraderId);
   }
 
-  const payload = {
-    quantity,
-    error_mode: "strict",
+  for (const cardTraderId of cardTraderIds) {
+    results.push(await syncCardTraderListingQuantity(cardTraderId, context));
+  }
+
+  return results;
+}
+
+// Backwards-compatible single-item entrypoint used by older routes.
+export async function syncInventoryItemToCardTrader(inventoryItem, options = {}) {
+  const inventoryItemId = inventoryItem?._id?.toString?.();
+  if (!inventoryItemId) {
+    return {
+      ok: false,
+      livePush: options.livePush !== false,
+      attempted: 0,
+      synced: 0,
+      method: null,
+      response: null,
+      skipped: [{ reason: "Missing inventoryItem" }],
+      error: "missing_inventory_item",
+    };
+  }
+
+  if (options.livePush === false) {
+    const cardTraderId = Number(inventoryItem?.cardTraderId);
+    const desired = Number.isFinite(cardTraderId)
+      ? await desiredQuantityForListing(cardTraderId)
+      : { desiredQuantity: null, inventoryItemIds: [], error: "invalid_cardtrader_id" };
+
+    return {
+      ok: !desired.error,
+      livePush: false,
+      attempted: 1,
+      synced: 0,
+      method: null,
+      response: {
+        dryRun: true,
+        quantity: desired.desiredQuantity,
+      },
+      skipped: desired.error ? [{ reason: desired.error }] : [],
+      cardTraderId: Number.isFinite(cardTraderId) ? cardTraderId : null,
+      quantity: desired.desiredQuantity,
+      inventoryItemIds: desired.inventoryItemIds,
+      error: desired.error,
+    };
+  }
+
+  const results = await syncInventoryItemIdsToCardTrader([inventoryItemId], options.context || {});
+  const result = results[0] || {
+    ok: false,
+    error: "cardtrader_sync_not_attempted",
   };
 
-  if (!livePush) {
-    result.response = {
-      dryRun: true,
-      payload,
-    };
-    return result;
-  }
-
-  const api = ct();
-  const methods = getCardTraderUpdateMethods();
-
-  let lastError = null;
-
-  for (const method of methods) {
-    try {
-      const response = await api[method](`/products/${cardTraderId}`, payload);
-
-      result.synced = 1;
-      result.method = method.toUpperCase();
-      result.response = response.data || null;
-
-      console.log("✅ [CardTrader] Inventory quantity synced", {
-        cardTraderId,
-        quantity,
-        method: result.method,
-        inventoryItemId: inventoryItem._id?.toString?.() || null,
-      });
-
-      return result;
-    } catch (err) {
-      lastError = err;
-
-      const status = err?.response?.status;
-
-      console.error("❌ [CardTrader] Quantity sync attempt failed", {
-        cardTraderId,
-        quantity,
-        method: method.toUpperCase(),
-        status,
-        error: err?.response?.data || err?.message || err,
-      });
-
-      // If the method is unsupported/not found, try the fallback method.
-      if ((status === 404 || status === 405) && methods.length > 1) {
-        continue;
-      }
-
-      break;
-    }
-  }
-
-  result.ok = false;
-  result.error =
-    lastError?.response?.data || lastError?.message || "CardTrader sync failed";
-
-  return result;
+  return {
+    ...result,
+    livePush: true,
+    attempted: 1,
+    synced: result.ok ? 1 : 0,
+    method: result.updated ? "PUT" : result.ok ? "CHECK" : null,
+    response: result.response || null,
+    skipped: result.ok ? [] : [{ reason: result.error || "CardTrader sync failed" }],
+    quantity: result.desiredQuantity ?? null,
+  };
 }

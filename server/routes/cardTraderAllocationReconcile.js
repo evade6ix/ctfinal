@@ -40,6 +40,17 @@ const cardTraderIdOf = (item) =>
     item?.product?.id
   );
 
+const blueprintIdOf = (item) =>
+  finite(
+    item?.blueprint_id,
+    item?.blueprintId,
+    item?.product?.blueprint_id,
+    item?.product?.blueprintId,
+    item?.article?.blueprint_id,
+    item?.article?.blueprintId,
+    item?.blueprint?.id
+  );
+
 const quantityOf = (item) => finite(item?.quantity, item?.qty, item?.amount) || 0;
 
 const conditionOf = (item) =>
@@ -51,18 +62,50 @@ const conditionOf = (item) =>
   item?.properties_hash?.card_condition ||
   null;
 
+function normalizeCondition(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+
+  if (["m", "mint"].includes(normalized)) return "mint";
+  if (["nm", "near mint"].includes(normalized)) return "near mint";
+  if (["lp", "sp", "lightly played", "slightly played"].includes(normalized)) {
+    return "slightly played";
+  }
+  if (["mp", "moderately played"].includes(normalized)) return "moderately played";
+  if (["hp", "heavily played"].includes(normalized)) return "heavily played";
+  if (["p", "played"].includes(normalized)) return "played";
+  if (normalized === "poor") return "poor";
+
+  return normalized;
+}
+
+function truthyFoil(value) {
+  if (value === true || value === 1) return true;
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["true", "1", "yes", "foil", "foiled"].includes(normalized);
+}
+
 const foilOf = (item) =>
-  item?.isFoil === true ||
-  item?.is_foil === true ||
-  item?.foil === true ||
-  item?.properties?.mtg_foil === true ||
-  item?.properties_hash?.mtg_foil === true ||
+  truthyFoil(item?.isFoil) ||
+  truthyFoil(item?.is_foil) ||
+  truthyFoil(item?.foil) ||
+  truthyFoil(item?.properties?.mtg_foil) ||
+  truthyFoil(item?.properties_hash?.mtg_foil) ||
   String(item?.variant || "").toLowerCase().includes("foil") ||
   String(item?.description || "").toLowerCase().includes("foil");
 
 const assignedQuantity = (item) =>
   (Array.isArray(item?.locations) ? item.locations : []).reduce(
     (sum, location) => sum + Math.max(0, Number(location?.quantity || 0)),
+    0
+  );
+
+const totalAssignedQuantity = (items) =>
+  (Array.isArray(items) ? items : []).reduce(
+    (sum, item) => sum + assignedQuantity(item),
     0
   );
 
@@ -99,6 +142,127 @@ function reviewPayload({ orderId, orderCode, orderItemId, cardTraderId, qty, ite
     pickedBy: null,
     status: "manual_review",
     failureReason: reason,
+  };
+}
+
+function candidateSummary(item) {
+  return {
+    inventoryItemId: item?._id?.toString?.() || null,
+    cardTraderId: item?.cardTraderId ?? null,
+    blueprintId: item?.blueprintId ?? null,
+    name: item?.name || null,
+    setCode: item?.setCode || null,
+    condition: item?.condition || null,
+    isFoil: item?.isFoil === true,
+    totalQuantity: Number(item?.totalQuantity || 0),
+    assignedQuantity: assignedQuantity(item),
+    locations: (Array.isArray(item?.locations) ? item.locations : []).map((location) => ({
+      bin:
+        location?.bin && typeof location.bin === "object"
+          ? location.bin.label || location.bin.name || location.bin._id?.toString?.()
+          : location?.bin?.toString?.() || null,
+      row: Number(location?.row || 0) || null,
+      quantity: Number(location?.quantity || 0),
+    })),
+  };
+}
+
+function buildAllocationPlan(candidates, requestedQuantity) {
+  let remaining = Number(requestedQuantity) || 0;
+  const plans = [];
+  const pickedLocations = [];
+
+  const sortedCandidates = [...candidates].sort(
+    (a, b) => assignedQuantity(b) - assignedQuantity(a)
+  );
+
+  for (const inventoryItem of sortedCandidates) {
+    if (remaining <= 0) break;
+
+    const allocation = allocateFromBins(inventoryItem.locations || [], remaining);
+    const pickedQuantity = allocation.pickedLocations.reduce(
+      (sum, location) => sum + Math.max(0, Number(location?.quantity || 0)),
+      0
+    );
+
+    if (pickedQuantity <= 0) continue;
+
+    plans.push({
+      inventoryItem,
+      pickedQuantity,
+      remainingLocations: allocation.remainingLocations,
+    });
+
+    pickedLocations.push(
+      ...allocation.pickedLocations.map((location) => ({
+        bin: location?.bin?._id || location?.bin,
+        row: location?.row,
+        quantity: location?.quantity,
+      }))
+    );
+
+    remaining -= pickedQuantity;
+  }
+
+  return {
+    plans,
+    pickedLocations,
+    fulfilledQuantity: Math.max(0, Number(requestedQuantity || 0) - remaining),
+    unfilled: Math.max(0, remaining),
+  };
+}
+
+async function loadInventoryCandidates({
+  cardTraderId,
+  blueprintId,
+  condition,
+  isFoil,
+  requestedQuantity,
+  session,
+}) {
+  const exactCandidates = await InventoryItem.find({ cardTraderId })
+    .populate("locations.bin", "name label rows description")
+    .session(session);
+
+  const exactIds = new Set(exactCandidates.map((candidate) => candidate._id.toString()));
+  const exactAssigned = totalAssignedQuantity(exactCandidates);
+  let blueprintCandidates = [];
+
+  if (
+    exactAssigned < requestedQuantity &&
+    Number.isFinite(blueprintId) &&
+    blueprintId > 0 &&
+    normalizeCondition(condition)
+  ) {
+    const possibleBlueprintCandidates = await InventoryItem.find({ blueprintId })
+      .populate("locations.bin", "name label rows description")
+      .session(session);
+
+    const wantedCondition = normalizeCondition(condition);
+
+    blueprintCandidates = possibleBlueprintCandidates.filter((candidate) => {
+      if (exactIds.has(candidate._id.toString())) return false;
+      if ((candidate.isFoil === true) !== isFoil) return false;
+      return normalizeCondition(candidate.condition) === wantedCondition;
+    });
+  }
+
+  const candidates = [...exactCandidates, ...blueprintCandidates];
+  const combinedAssigned = totalAssignedQuantity(candidates);
+
+  let matchStrategy = "exact_cardtrader_id";
+  if (exactAssigned < requestedQuantity && blueprintCandidates.length > 0) {
+    matchStrategy =
+      exactAssigned > 0 ? "exact_plus_blueprint_fallback" : "blueprint_fallback";
+  }
+
+  return {
+    candidates,
+    exactCandidates,
+    blueprintCandidates,
+    exactAssigned,
+    combinedAssigned,
+    matchStrategy,
   };
 }
 
@@ -154,6 +318,7 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
       totalLines: items.length,
       allocated: 0,
       retriedManualReview: 0,
+      matchedByBlueprint: 0,
       skippedExisting: 0,
       manualReview: 0,
       failed: 0,
@@ -164,8 +329,11 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
     for (const item of items) {
       const orderItemId = orderItemIdOf(item);
       const cardTraderId = cardTraderIdOf(item);
+      const blueprintId = blueprintIdOf(item);
       const qty = quantityOf(item);
       const name = item?.name || item?.product?.name || "Unknown item";
+      const condition = conditionOf(item);
+      const isFoil = foilOf(item);
 
       if (!Number.isFinite(orderItemId) || !Number.isFinite(cardTraderId) || qty <= 0) {
         result.failed++;
@@ -178,6 +346,8 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
 
       try {
         await session.withTransaction(async () => {
+          outcome = null;
+
           const existing = await OrderAllocation.findOne(
             allocationFilter(orderId, orderItemId)
           ).session(session);
@@ -187,15 +357,26 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
             return;
           }
 
-          const candidates = await InventoryItem.find({ cardTraderId })
-            .populate("locations.bin", "name label rows description")
-            .session(session);
+          const inventorySearch = await loadInventoryCandidates({
+            cardTraderId,
+            blueprintId,
+            condition,
+            isFoil,
+            requestedQuantity: qty,
+            session,
+          });
 
-          candidates.sort((a, b) => assignedQuantity(b) - assignedQuantity(a));
-          const inventoryItem =
-            candidates.find((candidate) => assignedQuantity(candidate) >= qty) || null;
+          const allocation = buildAllocationPlan(inventorySearch.candidates, qty);
 
-          if (!inventoryItem) {
+          if (
+            allocation.fulfilledQuantity < qty ||
+            !allocation.pickedLocations.length
+          ) {
+            const reason =
+              inventorySearch.candidates.length === 0
+                ? "exact_or_blueprint_inventory_not_found"
+                : "not_enough_matching_stock_to_fully_allocate_line";
+
             const payload = reviewPayload({
               orderId,
               orderCode,
@@ -203,70 +384,66 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
               cardTraderId,
               qty,
               item,
-              reason: "exact_cardtrader_id_not_found_or_no_stock",
+              reason,
             });
+
             if (existing) {
               existing.set(payload);
               await existing.save({ session });
             } else {
               await OrderAllocation.create([payload], { session });
             }
-            outcome = { type: "review", reason: payload.failureReason };
+
+            outcome = {
+              type: "review",
+              reason,
+              fulfilled: allocation.fulfilledQuantity,
+              blueprintId,
+              exactAssigned: inventorySearch.exactAssigned,
+              combinedAssigned: inventorySearch.combinedAssigned,
+              exactCandidates: inventorySearch.exactCandidates
+                .slice(0, 10)
+                .map(candidateSummary),
+              blueprintCandidates: inventorySearch.blueprintCandidates
+                .slice(0, 10)
+                .map(candidateSummary),
+            };
             return;
           }
 
-          const allocation = allocateFromBins(inventoryItem.locations || [], qty);
-          const fulfilled = allocation.pickedLocations.reduce(
-            (sum, location) => sum + Number(location?.quantity || 0),
-            0
-          );
+          const updatedInventoryItems = [];
 
-          if (fulfilled < qty || !allocation.pickedLocations.length) {
-            const payload = reviewPayload({
-              orderId,
-              orderCode,
-              orderItemId,
-              cardTraderId,
-              qty,
-              item,
-              reason: "not_enough_exact_stock_to_fully_allocate_line",
+          for (const plan of allocation.plans) {
+            const inventoryItem = plan.inventoryItem;
+            inventoryItem.locations = plan.remainingLocations;
+            inventoryItem.totalQuantity = Math.max(
+              0,
+              Number(inventoryItem.totalQuantity || 0) - plan.pickedQuantity
+            );
+            inventoryItem.markModified("locations");
+            await inventoryItem.save({ session });
+
+            updatedInventoryItems.push({
+              inventoryItemId: inventoryItem._id.toString(),
+              newQuantity: inventoryItem.totalQuantity,
+              deductedQuantity: plan.pickedQuantity,
             });
-            if (existing) {
-              existing.set(payload);
-              await existing.save({ session });
-            } else {
-              await OrderAllocation.create([payload], { session });
-            }
-            outcome = { type: "review", reason: payload.failureReason, fulfilled };
-            return;
           }
-
-          inventoryItem.locations = allocation.remainingLocations;
-          inventoryItem.totalQuantity = Math.max(
-            0,
-            Number(inventoryItem.totalQuantity || 0) - fulfilled
-          );
-          inventoryItem.markModified("locations");
-          await inventoryItem.save({ session });
 
           const payload = {
             source: "cardtrader",
-            inventoryItemId: inventoryItem._id,
+            inventoryItemId: allocation.plans[0].inventoryItem._id,
             orderId,
             orderCode,
             orderItemId,
             cardTraderId,
             requestedQuantity: qty,
-            fulfilledQuantity: fulfilled,
+            fulfilledQuantity: allocation.fulfilledQuantity,
             unfilled: allocation.unfilled,
-            name: name || inventoryItem.name || "Unknown item",
-            condition: conditionOf(item) || inventoryItem.condition || null,
-            isFoil: foilOf(item) || inventoryItem.isFoil === true,
-            pickedLocations: allocation.pickedLocations.map((location) => ({
-              bin: location?.bin?._id || location?.bin,
-              row: location?.row,
-              quantity: location?.quantity,
-            })),
+            name: name || allocation.plans[0].inventoryItem.name || "Unknown item",
+            condition: condition || allocation.plans[0].inventoryItem.condition || null,
+            isFoil: isFoil || allocation.plans[0].inventoryItem.isFoil === true,
+            pickedLocations: allocation.pickedLocations,
             picked: false,
             pickedAt: null,
             pickedBy: null,
@@ -284,8 +461,10 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
           outcome = {
             type: "allocated",
             retried: !!existing,
-            inventoryItemId: inventoryItem._id.toString(),
-            newQuantity: inventoryItem.totalQuantity,
+            matchStrategy: inventorySearch.matchStrategy,
+            blueprintId,
+            updatedInventoryItems,
+            pickedLocations: allocation.pickedLocations,
           };
         });
       } catch (error) {
@@ -294,6 +473,7 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
         result.failures.push({
           orderItemId,
           cardTraderId,
+          blueprintId,
           name,
           reason: "allocation_transaction_failed",
           details: error?.message || String(error),
@@ -306,34 +486,68 @@ router.post("/reconcile-order/:orderId", async (req, res) => {
         result.skippedExisting++;
       } else if (outcome?.type === "review") {
         result.manualReview++;
-        result.failures.push({
+        const failure = {
           orderItemId,
           cardTraderId,
+          blueprintId,
           name,
           requestedQuantity: qty,
           fulfilled: outcome.fulfilled || 0,
+          exactAssigned: outcome.exactAssigned || 0,
+          combinedAssigned: outcome.combinedAssigned || 0,
           reason: `manual_review_${outcome.reason}`,
+          exactCandidates: outcome.exactCandidates,
+          blueprintCandidates: outcome.blueprintCandidates,
+        };
+        result.failures.push(failure);
+
+        console.warn("⚠️ [ALLOCATIONS] MANUAL REVIEW STILL HAS NO BINS", {
+          orderId,
+          orderCode,
+          ...failure,
         });
       } else if (outcome?.type === "allocated") {
         result.allocated++;
         if (outcome.retried) result.retriedManualReview++;
+        if (outcome.matchStrategy !== "exact_cardtrader_id") {
+          result.matchedByBlueprint++;
+        }
 
-        const syncResult = await syncManaPool(outcome.inventoryItemId, {
-          source: "cardtrader_sale_allocation",
+        console.log("✅ [ALLOCATIONS] ORDER LINE ALLOCATED", {
           orderId,
+          orderCode,
           orderItemId,
           cardTraderId,
-          newQuantity: outcome.newQuantity,
+          blueprintId,
+          name,
+          quantity: qty,
+          matchStrategy: outcome.matchStrategy,
+          inventoryItems: outcome.updatedInventoryItems,
+          pickedLocations: outcome.pickedLocations,
         });
 
-        result.manaPoolSyncs.push({
-          orderItemId,
-          cardTraderId,
-          inventoryItemId: outcome.inventoryItemId,
-          ok: syncResult?.ok === true,
-          synced: syncResult?.synced || 0,
-          error: syncResult?.error || null,
-        });
+        for (const updated of outcome.updatedInventoryItems) {
+          const syncResult = await syncManaPool(updated.inventoryItemId, {
+            source: "cardtrader_sale_allocation",
+            orderId,
+            orderItemId,
+            cardTraderId,
+            blueprintId,
+            matchStrategy: outcome.matchStrategy,
+            newQuantity: updated.newQuantity,
+            deductedQuantity: updated.deductedQuantity,
+          });
+
+          result.manaPoolSyncs.push({
+            orderItemId,
+            cardTraderId,
+            blueprintId,
+            inventoryItemId: updated.inventoryItemId,
+            ok: syncResult?.ok === true,
+            synced: syncResult?.synced || 0,
+            error: syncResult?.error || null,
+          });
+        }
       }
     }
 

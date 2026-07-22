@@ -30,15 +30,24 @@ type WeeklySummary = {
   orders: ApiOrder[];
 };
 
+type BinLocation = {
+  bin: string;
+  row: number;
+  quantity: number;
+};
+
 type OrderItem = {
   id?: number | string;
+  orderItemId?: number | null;
+  hubPendingOrderId?: string | null;
+  hubPendingOrderItemId?: number | null;
   cardTraderId?: number | null;
   blueprintId?: number | null;
   name?: string;
   quantity?: number;
   image_url?: string | null;
   set_name?: string | null;
-  binLocations?: { bin: string; row: number; quantity: number }[];
+  binLocations?: BinLocation[];
   picked?: boolean;
   pickedAt?: string | null;
   pickedBy?: string | null;
@@ -46,7 +55,85 @@ type OrderItem = {
   condition?: string | null;
 };
 
+type PickEntry = {
+  key: string;
+  item: OrderItem;
+  itemIndex: number;
+  location: BinLocation | null;
+  locationIndex: number | null;
+};
+
 type FilterMode = "all" | "picked" | "unpicked";
+
+function compareText(a: unknown, b: unknown) {
+  return String(a ?? "").localeCompare(String(b ?? ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function locationKey(location: BinLocation | null) {
+  if (!location) return "__no_location__";
+  return `${location.bin || "?"}::${location.row ?? "?"}`;
+}
+
+function buildPickEntries(items: OrderItem[]): PickEntry[] {
+  const entries: PickEntry[] = [];
+
+  items.forEach((item, itemIndex) => {
+    const locations = (item.binLocations || []).filter(
+      (location) => Number(location.quantity || 0) > 0
+    );
+
+    if (locations.length === 0) {
+      entries.push({
+        key: `${item.id ?? item.cardTraderId ?? itemIndex}-no-location-${itemIndex}`,
+        item,
+        itemIndex,
+        location: null,
+        locationIndex: null,
+      });
+      return;
+    }
+
+    locations.forEach((location, locationIndex) => {
+      entries.push({
+        key: `${item.id ?? item.cardTraderId ?? itemIndex}-${location.bin}-${location.row}-${locationIndex}`,
+        item,
+        itemIndex,
+        location,
+        locationIndex,
+      });
+    });
+  });
+
+  return entries.sort((a, b) => {
+    if (a.location && !b.location) return -1;
+    if (!a.location && b.location) return 1;
+
+    if (a.location && b.location) {
+      const binCompare = compareText(a.location.bin, b.location.bin);
+      if (binCompare !== 0) return binCompare;
+
+      const rowCompare = Number(a.location.row) - Number(b.location.row);
+      if (rowCompare !== 0) return rowCompare;
+    }
+
+    const setCompare = compareText(a.item.set_name, b.item.set_name);
+    if (setCompare !== 0) return setCompare;
+
+    const nameCompare = compareText(a.item.name, b.item.name);
+    if (nameCompare !== 0) return nameCompare;
+
+    return a.itemIndex - b.itemIndex;
+  });
+}
+
+function filterEntries(entries: PickEntry[], mode: FilterMode): PickEntry[] {
+  if (mode === "picked") return entries.filter((entry) => !!entry.item.picked);
+  if (mode === "unpicked") return entries.filter((entry) => !entry.item.picked);
+  return entries;
+}
 
 export function OrdersWeeklyGroupedView() {
   const [data, setData] = useState<WeeklySummary[]>([]);
@@ -101,61 +188,16 @@ export function OrdersWeeklyGroupedView() {
     return `${startStr} – ${endStr}`;
   };
 
-  const sortOrderItems = (items: OrderItem[]): OrderItem[] => {
-    return [...items].sort((a, b) => {
-      const aHasBin = !!(a.binLocations && a.binLocations.length > 0);
-      const bHasBin = !!(b.binLocations && b.binLocations.length > 0);
-
-      if (aHasBin && !bHasBin) return -1;
-      if (!aHasBin && bHasBin) return 1;
-
-      if (aHasBin && bHasBin) {
-        const aLoc = a.binLocations![0];
-        const bLoc = b.binLocations![0];
-
-        const aBin = (aLoc.bin || "").toString();
-        const bBin = (bLoc.bin || "").toString();
-
-        if (aBin !== bBin) {
-          return aBin.localeCompare(bBin, undefined, { numeric: true });
-        }
-
-        const aRow = aLoc.row ?? Number.MAX_SAFE_INTEGER;
-        const bRow = bLoc.row ?? Number.MAX_SAFE_INTEGER;
-
-        if (aRow !== bRow) return aRow - bRow;
-      }
-
-      const aSet = (a.set_name || "").toString();
-      const bSet = (b.set_name || "").toString();
-
-      if (aSet !== bSet) {
-        return aSet.localeCompare(bSet, undefined, { numeric: true });
-      }
-
-      const aName = (a.name || "").toString();
-      const bName = (b.name || "").toString();
-
-      return aName.localeCompare(bName, undefined, { numeric: true });
-    });
-  };
-
-  const getCardImageSrc = (it: OrderItem) => {
+  const getCardImageSrc = (item: OrderItem) => {
     if (
-      it.image_url &&
-      typeof it.image_url === "string" &&
-      it.image_url.startsWith("http")
+      item.image_url &&
+      typeof item.image_url === "string" &&
+      item.image_url.startsWith("http")
     ) {
-      return it.image_url;
+      return item.image_url;
     }
 
     return "/card-placeholder.png";
-  };
-
-  const filterItems = (items: OrderItem[], mode: FilterMode): OrderItem[] => {
-    if (mode === "picked") return items.filter((it) => !!it.picked);
-    if (mode === "unpicked") return items.filter((it) => !it.picked);
-    return items;
   };
 
   const loadItems = async (orderId: string | number) => {
@@ -176,11 +218,9 @@ export function OrdersWeeklyGroupedView() {
       }
 
       const loadedItems = (await res.json()) as OrderItem[];
-      const sorted = sortOrderItems(Array.isArray(loadedItems) ? loadedItems : []);
-
       setItemsByOrder((prev) => ({
         ...prev,
-        [orderId]: sorted,
+        [orderId]: Array.isArray(loadedItems) ? loadedItems : [],
       }));
     } catch (err) {
       console.error("Error loading order items", err);
@@ -206,7 +246,7 @@ export function OrdersWeeklyGroupedView() {
 
   const handleShowImage = async (
     orderId: string | number,
-    index: number,
+    itemIndex: number,
     item: OrderItem
   ) => {
     const name = item.name;
@@ -234,10 +274,10 @@ export function OrdersWeeklyGroupedView() {
         if (!existing) return prev;
 
         const clone = [...existing];
-        const original = clone[index];
+        const original = clone[itemIndex];
         if (!original) return prev;
 
-        clone[index] = {
+        clone[itemIndex] = {
           ...original,
           image_url: json.image_url,
         };
@@ -252,46 +292,57 @@ export function OrdersWeeklyGroupedView() {
     }
   };
 
+  function getPickKey(displayOrderId: string | number, itemIndex: number) {
+    const item = itemsByOrder[displayOrderId]?.[itemIndex];
+    return `${displayOrderId}-${item?.cardTraderId ?? item?.id ?? `idx-${itemIndex}`}`;
+  }
+
   async function persistPick(
-    orderId: string | number,
-    index: number,
+    displayOrderId: string | number,
+    itemIndex: number,
     item: OrderItem
   ) {
-    const key = `${orderId}-${item.cardTraderId ?? `idx-${index}`}`;
+    const key = getPickKey(displayOrderId, itemIndex);
     setPickingKey(key);
 
     try {
+      const allocationOrderId = item.hubPendingOrderId || displayOrderId;
+      const allocationOrderItemId =
+        item.hubPendingOrderItemId ?? item.orderItemId ?? item.id;
+
       if (item.cardTraderId) {
         const res = await fetch("/api/order-allocations/pick", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId,
-            orderItemId: item.id,
+            orderId: allocationOrderId,
+            orderItemId: allocationOrderItemId,
             cardTraderId: item.cardTraderId,
+            source: "cardtrader",
             pickedBy: "local",
           }),
         });
 
         if (!res.ok) {
           console.error("Failed picking", await res.text());
+          return;
         }
       }
 
       setItemsByOrder((prev) => {
-        const arr = prev[orderId];
+        const arr = prev[displayOrderId];
         if (!arr) return prev;
 
         const clone = [...arr];
-        if (!clone[index]) return prev;
+        if (!clone[itemIndex]) return prev;
 
-        clone[index] = {
-          ...clone[index],
+        clone[itemIndex] = {
+          ...clone[itemIndex],
           picked: true,
           pickedAt: new Date().toISOString(),
         };
 
-        return { ...prev, [orderId]: clone };
+        return { ...prev, [displayOrderId]: clone };
       });
     } finally {
       setPickingKey(null);
@@ -299,58 +350,84 @@ export function OrdersWeeklyGroupedView() {
   }
 
   async function persistUnpick(
-    orderId: string | number,
-    index: number,
+    displayOrderId: string | number,
+    itemIndex: number,
     item: OrderItem
   ) {
-    const key = `${orderId}-${item.cardTraderId ?? `idx-${index}`}`;
+    const key = getPickKey(displayOrderId, itemIndex);
     setPickingKey(key);
 
     try {
+      const allocationOrderId = item.hubPendingOrderId || displayOrderId;
+      const allocationOrderItemId =
+        item.hubPendingOrderItemId ?? item.orderItemId ?? item.id;
+
       if (item.cardTraderId) {
         const res = await fetch("/api/order-allocations/unpick", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId,
-            orderItemId: item.id,
+            orderId: allocationOrderId,
+            orderItemId: allocationOrderItemId,
             cardTraderId: item.cardTraderId,
+            source: "cardtrader",
           }),
         });
 
         if (!res.ok) {
           console.error("Failed unpicking", await res.text());
+          return;
         }
       }
 
       setItemsByOrder((prev) => {
-        const arr = prev[orderId];
+        const arr = prev[displayOrderId];
         if (!arr) return prev;
 
         const clone = [...arr];
-        if (!clone[index]) return prev;
+        if (!clone[itemIndex]) return prev;
 
-        clone[index] = {
-          ...clone[index],
+        clone[itemIndex] = {
+          ...clone[itemIndex],
           picked: false,
           pickedAt: null,
         };
 
-        return { ...prev, [orderId]: clone };
+        return { ...prev, [displayOrderId]: clone };
       });
     } finally {
       setPickingKey(null);
     }
   }
 
-  async function handleMarkFulfilledUpTo(orderId: string | number, index: number) {
-    const items = itemsByOrder[orderId] || [];
+  async function handleMarkFulfilledUpTo(
+    orderId: string | number,
+    entryIndex: number,
+    entries: PickEntry[]
+  ) {
+    const lastEntryIndexByItem = new Map<number, number>();
+    entries.forEach((entry, index) => {
+      lastEntryIndexByItem.set(entry.itemIndex, index);
+    });
 
-    for (let i = 0; i <= index; i++) {
-      const item = items[i];
+    const itemIndexesToPick = [
+      ...new Set(
+        entries
+          .slice(0, entryIndex + 1)
+          .filter(
+            (entry) =>
+              lastEntryIndexByItem.get(entry.itemIndex) !== undefined &&
+              lastEntryIndexByItem.get(entry.itemIndex)! <= entryIndex
+          )
+          .map((entry) => entry.itemIndex)
+      ),
+    ];
+
+    for (const itemIndex of itemIndexesToPick) {
+      const item = itemsByOrder[orderId]?.[itemIndex];
       if (item && !item.picked) {
         // eslint-disable-next-line no-await-in-loop
-        await persistPick(orderId, i, item);
+        await persistPick(orderId, itemIndex, item);
       }
     }
   }
@@ -360,9 +437,10 @@ export function OrdersWeeklyGroupedView() {
       <Title order={3}>CardTrader Zero – Weekly Shipments</Title>
       <Text size="sm" c="dimmed">
         Every Wednesday → Tuesday. The live consolidated CT Zero shipment appears
-        once CardTrader creates the paid shipment order. Click an order to see
-        its cards sorted by bin and row. Images load on demand. Picked lines are
-        stored in Mongo and shared with your other views.
+        once CardTrader creates the paid shipment order. Each physical bin and row
+        is shown as its own pick entry so the list follows your warehouse route.
+        Images load on demand. Picked lines are stored in Mongo and shared with your
+        other views.
       </Text>
 
       <Group gap="xs">
@@ -409,8 +487,8 @@ export function OrdersWeeklyGroupedView() {
       {!loading &&
         data.map((week) => {
           const label = formatWeekLabel(week.weekStart);
-          const shipmentOrders = (week.orders || []).filter((o) => {
-            const state = String(o.state || "").toLowerCase();
+          const shipmentOrders = (week.orders || []).filter((order) => {
+            const state = String(order.state || "").toLowerCase();
             return state === "paid";
           });
 
@@ -467,44 +545,44 @@ export function OrdersWeeklyGroupedView() {
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {shipmentOrders.map((o) => (
-                      <Fragment key={o.id}>
+                    {shipmentOrders.map((order) => (
+                      <Fragment key={order.id}>
                         <Table.Tr
                           style={{ cursor: "pointer" }}
-                          onClick={() => handleToggleOrder(o)}
+                          onClick={() => handleToggleOrder(order)}
                         >
-                          <Table.Td>{o.code || o.id}</Table.Td>
+                          <Table.Td>{order.code || order.id}</Table.Td>
                           <Table.Td>
                             <Badge color="green" variant="filled" size="xs">
-                              {String(o.state || "").toUpperCase()}
+                              {String(order.state || "").toUpperCase()}
                             </Badge>
                           </Table.Td>
                           <Table.Td>
-                            {o.createdAt
-                              ? new Date(o.createdAt).toLocaleString("en-CA", {
+                            {order.createdAt
+                              ? new Date(order.createdAt).toLocaleString("en-CA", {
                                   dateStyle: "medium",
                                   timeStyle: "short",
                                 })
                               : "-"}
                           </Table.Td>
-                          <Table.Td>{o.formattedTotal ?? "-"}</Table.Td>
+                          <Table.Td>{order.formattedTotal ?? "-"}</Table.Td>
                           <Table.Td>
                             <Button
                               size="xs"
                               variant="light"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleOrder(o);
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleToggleOrder(order);
                               }}
                             >
-                              {expandedOrderId === o.id
+                              {expandedOrderId === order.id
                                 ? "Hide cards"
                                 : "View cards"}
                             </Button>
                           </Table.Td>
                         </Table.Tr>
 
-                        {expandedOrderId === o.id && (
+                        {expandedOrderId === order.id && (
                           <Table.Tr>
                             <Table.Td
                               colSpan={5}
@@ -515,31 +593,43 @@ export function OrdersWeeklyGroupedView() {
                               }}
                             >
                               <Box p="md">
-                                {!itemsByOrder[o.id] && loadingItems && (
+                                {!itemsByOrder[order.id] && loadingItems && (
                                   <Group justify="center" p="lg">
                                     <Loader size="sm" />
                                   </Group>
                                 )}
 
-                                {itemsByOrder[o.id] &&
-                                  itemsByOrder[o.id].length === 0 &&
+                                {itemsByOrder[order.id] &&
+                                  itemsByOrder[order.id].length === 0 &&
                                   !loadingItems && (
                                     <Text c="dimmed" ta="center">
                                       No line items found.
                                     </Text>
                                   )}
 
-                                {itemsByOrder[o.id] &&
-                                  itemsByOrder[o.id].length > 0 &&
+                                {itemsByOrder[order.id] &&
+                                  itemsByOrder[order.id].length > 0 &&
                                   (() => {
-                                    const allItems = itemsByOrder[o.id]!;
-                                    const visibleItems = filterItems(
-                                      allItems,
+                                    const allItems = itemsByOrder[order.id]!;
+                                    const allEntries = buildPickEntries(allItems);
+                                    const visibleEntries = filterEntries(
+                                      allEntries,
                                       filterMode
                                     );
+                                    const lastEntryIndexByItem = new Map<
+                                      number,
+                                      number
+                                    >();
+
+                                    allEntries.forEach((entry, index) => {
+                                      lastEntryIndexByItem.set(
+                                        entry.itemIndex,
+                                        index
+                                      );
+                                    });
 
                                     if (
-                                      visibleItems.length === 0 &&
+                                      visibleEntries.length === 0 &&
                                       !loadingItems
                                     ) {
                                       return (
@@ -549,207 +639,262 @@ export function OrdersWeeklyGroupedView() {
                                       );
                                     }
 
+                                    let previousGroupKey: string | null = null;
+
                                     return (
-                                      <Stack gap="md">
-                                        {visibleItems.map((it) => {
-                                          const isPicked = !!it.picked;
-                                          const originalIndex = allItems.indexOf(it);
-                                          const key = `${o.id}-${
-                                            it.cardTraderId ?? `idx-${originalIndex}`
-                                          }`;
-                                          const isBusy =
-                                            pickingKey ===
-                                            `${o.id}-${
-                                              it.cardTraderId ?? `idx-${originalIndex}`
-                                            }`;
+                                      <Stack gap="xs">
+                                        {visibleEntries.map((entry) => {
+                                          const item = entry.item;
+                                          const isPicked = !!item.picked;
+                                          const itemLocationCount =
+                                            item.binLocations?.length || 0;
+                                          const entryIndex = allEntries.indexOf(entry);
+                                          const isLastLocationForItem =
+                                            lastEntryIndexByItem.get(
+                                              entry.itemIndex
+                                            ) === entryIndex;
+                                          const busyKey = getPickKey(
+                                            order.id,
+                                            entry.itemIndex
+                                          );
+                                          const isBusy = pickingKey === busyKey;
+                                          const currentGroupKey = locationKey(
+                                            entry.location
+                                          );
+                                          const showGroupHeader =
+                                            currentGroupKey !== previousGroupKey;
+
+                                          previousGroupKey = currentGroupKey;
 
                                           return (
-                                            <Group
-                                              key={key}
-                                              align="flex-start"
-                                              wrap="nowrap"
-                                              style={{
-                                                padding: "8px 12px",
-                                                borderBottom: "1px solid #333",
-                                                background: isPicked
-                                                  ? "rgba(46, 204, 113, 0.12)"
-                                                  : "transparent",
-                                                borderLeft: isPicked
-                                                  ? "3px solid #2ecc71"
-                                                  : "3px solid transparent",
-                                                borderRadius: 4,
-                                              }}
-                                            >
-                                              <Box
-                                                style={{
-                                                  display: "flex",
-                                                  flexDirection: "column",
-                                                  alignItems: "center",
-                                                  marginRight: 16,
-                                                }}
-                                              >
-                                                <img
-                                                  src={getCardImageSrc(it)}
-                                                  width={140}
-                                                  height={196}
-                                                  style={{
-                                                    objectFit: "cover",
-                                                    borderRadius: 6,
-                                                  }}
-                                                  loading="lazy"
-                                                  decoding="async"
-                                                  onError={(e) => {
-                                                    (
-                                                      e.target as HTMLImageElement
-                                                    ).src = "/card-placeholder.png";
-                                                  }}
-                                                  alt={it.name || "Card image"}
-                                                />
-                                                <Button
-                                                  mt={6}
-                                                  size="xs"
-                                                  variant="subtle"
-                                                  onClick={() =>
-                                                    handleShowImage(
-                                                      o.id,
-                                                      originalIndex,
-                                                      it
-                                                    )
-                                                  }
-                                                >
-                                                  Show image
-                                                </Button>
-                                              </Box>
-
-                                              <Box
-                                                style={{
-                                                  flex: 1,
-                                                  display: "flex",
-                                                  flexDirection: "column",
-                                                  gap: 6,
-                                                }}
-                                              >
+                                            <Fragment key={entry.key}>
+                                              {showGroupHeader && (
                                                 <Group
                                                   justify="space-between"
-                                                  align="flex-start"
-                                                  wrap="nowrap"
+                                                  mt="sm"
+                                                  px="sm"
+                                                  py={6}
+                                                  style={{
+                                                    background:
+                                                      "var(--mantine-color-dark-6)",
+                                                    borderRadius: 6,
+                                                    border: "1px solid #3a3a3a",
+                                                  }}
                                                 >
-                                                  <Box style={{ flex: 1 }}>
-                                                    <Text fw={500}>
-                                                      {it.name || "No name"}
-                                                    </Text>
-                                                    <Text size="xs" c="dimmed">
-                                                      {it.set_name || "Unknown set"}
-                                                    </Text>
-
-                                                    <Group gap={6} mt={6}>
-                                                      <Badge
-                                                        size="sm"
-                                                        color={
-                                                          it.isFoil
-                                                            ? "yellow"
-                                                            : "gray"
-                                                        }
-                                                        variant={
-                                                          it.isFoil
-                                                            ? "filled"
-                                                            : "light"
-                                                        }
-                                                      >
-                                                        {it.isFoil
-                                                          ? "Foil"
-                                                          : "Non-Foil"}
-                                                      </Badge>
-
-                                                      {it.condition && (
-                                                        <Badge
-                                                          size="sm"
-                                                          variant="light"
-                                                          color="blue"
-                                                        >
-                                                          {it.condition}
-                                                        </Badge>
-                                                      )}
-                                                    </Group>
-
-                                                    <Text size="sm" mt={4}>
-                                                      Qty: {it.quantity ?? "?"}
-                                                    </Text>
-
-                                                    <Group gap={6} mt={6}>
-                                                      {(it.binLocations || []).map(
-                                                        (b, i) => (
-                                                          <Badge
-                                                            key={i}
-                                                            color="yellow"
-                                                          >
-                                                            {b.bin ?? "?"} / Row{
-                                                              " "
-                                                            }
-                                                            {b.row ?? "?"} (x
-                                                            {b.quantity ?? "?"})
-                                                          </Badge>
-                                                        )
-                                                      )}
-                                                    </Group>
-                                                  </Box>
-
-                                                  <Group
-                                                    gap="xs"
-                                                    justify="flex-end"
-                                                    align="center"
-                                                    style={{ flexShrink: 0 }}
-                                                  >
-                                                    <Button
-                                                      size="xs"
-                                                      variant={
-                                                        isPicked
-                                                          ? "filled"
-                                                          : "outline"
-                                                      }
-                                                      color={
-                                                        isPicked ? "green" : "gray"
-                                                      }
-                                                      loading={isBusy}
-                                                      disabled={isBusy}
-                                                      onClick={() =>
-                                                        isPicked
-                                                          ? persistUnpick(
-                                                              o.id,
-                                                              originalIndex,
-                                                              it
-                                                            )
-                                                          : persistPick(
-                                                              o.id,
-                                                              originalIndex,
-                                                              it
-                                                            )
-                                                      }
-                                                    >
-                                                      {isPicked
-                                                        ? "Picked"
-                                                        : "Mark picked"}
-                                                    </Button>
-                                                  </Group>
+                                                  <Text fw={700} size="sm">
+                                                    {entry.location
+                                                      ? `${entry.location.bin || "?"} / Row ${entry.location.row ?? "?"}`
+                                                      : "No saved bin / row"}
+                                                  </Text>
                                                 </Group>
+                                              )}
 
-                                                <Group justify="flex-end" mt={4}>
+                                              <Group
+                                                align="flex-start"
+                                                wrap="nowrap"
+                                                style={{
+                                                  padding: "8px 12px",
+                                                  borderBottom: "1px solid #333",
+                                                  background: isPicked
+                                                    ? "rgba(46, 204, 113, 0.12)"
+                                                    : "transparent",
+                                                  borderLeft: isPicked
+                                                    ? "3px solid #2ecc71"
+                                                    : "3px solid transparent",
+                                                  borderRadius: 4,
+                                                }}
+                                              >
+                                                <Box
+                                                  style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    alignItems: "center",
+                                                    marginRight: 16,
+                                                  }}
+                                                >
+                                                  <img
+                                                    src={getCardImageSrc(item)}
+                                                    width={140}
+                                                    height={196}
+                                                    style={{
+                                                      objectFit: "cover",
+                                                      borderRadius: 6,
+                                                    }}
+                                                    loading="lazy"
+                                                    decoding="async"
+                                                    onError={(event) => {
+                                                      (
+                                                        event.target as HTMLImageElement
+                                                      ).src =
+                                                        "/card-placeholder.png";
+                                                    }}
+                                                    alt={item.name || "Card image"}
+                                                  />
                                                   <Button
+                                                    mt={6}
                                                     size="xs"
                                                     variant="subtle"
-                                                    color="green"
                                                     onClick={() =>
-                                                      handleMarkFulfilledUpTo(
-                                                        o.id,
-                                                        originalIndex
+                                                      handleShowImage(
+                                                        order.id,
+                                                        entry.itemIndex,
+                                                        item
                                                       )
                                                     }
                                                   >
-                                                    Mark up to here
+                                                    Show image
                                                   </Button>
-                                                </Group>
-                                              </Box>
-                                            </Group>
+                                                </Box>
+
+                                                <Box
+                                                  style={{
+                                                    flex: 1,
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    gap: 6,
+                                                  }}
+                                                >
+                                                  <Group
+                                                    justify="space-between"
+                                                    align="flex-start"
+                                                    wrap="nowrap"
+                                                  >
+                                                    <Box style={{ flex: 1 }}>
+                                                      <Text fw={500}>
+                                                        {item.name || "No name"}
+                                                      </Text>
+                                                      <Text size="xs" c="dimmed">
+                                                        {item.set_name ||
+                                                          "Unknown set"}
+                                                      </Text>
+
+                                                      <Group gap={6} mt={6}>
+                                                        <Badge
+                                                          size="sm"
+                                                          color={
+                                                            item.isFoil
+                                                              ? "yellow"
+                                                              : "gray"
+                                                          }
+                                                          variant={
+                                                            item.isFoil
+                                                              ? "filled"
+                                                              : "light"
+                                                          }
+                                                        >
+                                                          {item.isFoil
+                                                            ? "Foil"
+                                                            : "Non-Foil"}
+                                                        </Badge>
+
+                                                        {item.condition && (
+                                                          <Badge
+                                                            size="sm"
+                                                            variant="light"
+                                                            color="blue"
+                                                          >
+                                                            {item.condition}
+                                                          </Badge>
+                                                        )}
+                                                      </Group>
+
+                                                      <Text size="sm" mt={4}>
+                                                        Qty: {entry.location
+                                                          ? entry.location.quantity
+                                                          : item.quantity ?? "?"}
+                                                      </Text>
+
+                                                      <Group gap={6} mt={6}>
+                                                        <Badge color="yellow">
+                                                          {entry.location
+                                                            ? `${entry.location.bin || "?"} / Row ${entry.location.row ?? "?"} (x${entry.location.quantity ?? "?"})`
+                                                            : "No saved location"}
+                                                        </Badge>
+                                                      </Group>
+
+                                                      {itemLocationCount > 1 &&
+                                                        !isLastLocationForItem && (
+                                                          <Text
+                                                            size="xs"
+                                                            c="dimmed"
+                                                            mt={6}
+                                                          >
+                                                            This card has more
+                                                            locations later in the
+                                                            pick route.
+                                                          </Text>
+                                                        )}
+                                                    </Box>
+
+                                                    <Group
+                                                      gap="xs"
+                                                      justify="flex-end"
+                                                      align="center"
+                                                      style={{ flexShrink: 0 }}
+                                                    >
+                                                      {isLastLocationForItem && (
+                                                        <Button
+                                                          size="xs"
+                                                          variant={
+                                                            isPicked
+                                                              ? "filled"
+                                                              : "outline"
+                                                          }
+                                                          color={
+                                                            isPicked
+                                                              ? "green"
+                                                              : "gray"
+                                                          }
+                                                          loading={isBusy}
+                                                          disabled={isBusy}
+                                                          onClick={() =>
+                                                            isPicked
+                                                              ? persistUnpick(
+                                                                  order.id,
+                                                                  entry.itemIndex,
+                                                                  item
+                                                                )
+                                                              : persistPick(
+                                                                  order.id,
+                                                                  entry.itemIndex,
+                                                                  item
+                                                                )
+                                                          }
+                                                        >
+                                                          {isPicked
+                                                            ? "Picked"
+                                                            : itemLocationCount > 1
+                                                              ? "Mark all locations picked"
+                                                              : "Mark picked"}
+                                                        </Button>
+                                                      )}
+                                                    </Group>
+                                                  </Group>
+
+                                                  {isLastLocationForItem && (
+                                                    <Group
+                                                      justify="flex-end"
+                                                      mt={4}
+                                                    >
+                                                      <Button
+                                                        size="xs"
+                                                        variant="subtle"
+                                                        color="green"
+                                                        onClick={() =>
+                                                          handleMarkFulfilledUpTo(
+                                                            order.id,
+                                                            entryIndex,
+                                                            allEntries
+                                                          )
+                                                        }
+                                                      >
+                                                        Mark up to here
+                                                      </Button>
+                                                    </Group>
+                                                  )}
+                                                </Box>
+                                              </Group>
+                                            </Fragment>
                                           );
                                         })}
                                       </Stack>

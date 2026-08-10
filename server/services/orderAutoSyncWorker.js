@@ -1,6 +1,11 @@
 // server/services/orderAutoSyncWorker.js
 import { getSellerOrders, getSellerOrderById } from "./manapoolClient.js";
 import { reconcileManaPoolOrder } from "./manapoolOrderReconcile.js";
+import {
+  deleteShippedManaPoolOrderAllocations,
+  getManaPoolOrderStatus,
+  isShippedManaPoolOrder,
+} from "./manapoolOrderCleanup.js";
 
 let timer = null;
 let running = false;
@@ -111,7 +116,7 @@ function isAfterCutoff(order, cutoffDate) {
 }
 
 function isManaPoolStatusEligible(order) {
-  const rawStatus = String(order?.status || order?.state || "").toLowerCase();
+  const rawStatus = getManaPoolOrderStatus(order);
 
   // If ManaPool does not return a status, we allow it because the seller/orders
   // endpoint usually returns actionable seller orders.
@@ -124,6 +129,7 @@ function isManaPoolStatusEligible(order) {
     "fulfilled",
     "shipped",
     "sent",
+    "delivered",
     "complete",
     "completed",
     "closed",
@@ -210,13 +216,18 @@ async function runManaPoolAutoSync() {
     }
 
     if (!isManaPoolStatusEligible(orderSummary)) {
+      const cleanup = isShippedManaPoolOrder(orderSummary)
+        ? await deleteShippedManaPoolOrderAllocations(orderSummary)
+        : null;
+
       skipped++;
       results.push({
         orderId,
         ok: true,
         skipped: true,
         reason: "ineligible_status",
-        status: orderSummary?.status || orderSummary?.state || null,
+        status: getManaPoolOrderStatus(orderSummary) || null,
+        cleanup,
       });
       continue;
     }
@@ -239,13 +250,18 @@ async function runManaPoolAutoSync() {
       const fullOrder = unwrapManaPoolOrder(fullOrderData);
 
       if (!isManaPoolStatusEligible(fullOrder)) {
+        const cleanup = isShippedManaPoolOrder(fullOrder)
+          ? await deleteShippedManaPoolOrderAllocations(fullOrder)
+          : null;
+
         skipped++;
         results.push({
           orderId,
           ok: true,
           skipped: true,
           reason: "full_order_ineligible_status",
-          status: fullOrder?.status || fullOrder?.state || null,
+          status: getManaPoolOrderStatus(fullOrder) || null,
+          cleanup,
         });
         continue;
       }

@@ -7,6 +7,7 @@ import {
 } from "../services/manapoolClient.js";
 
 import { reconcileManaPoolOrder } from "../services/manapoolOrderReconcile.js";
+import { deleteShippedManaPoolOrdersAllocations } from "../services/manapoolOrderCleanup.js";
 
 const router = express.Router();
 
@@ -18,6 +19,15 @@ function unwrapManaPoolOrder(data) {
     data?.seller_order ||
     data
   );
+}
+
+function unwrapManaPoolOrders(data) {
+  if (Array.isArray(data?.orders)) return data.orders;
+  if (Array.isArray(data?.data?.orders)) return data.data.orders;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.seller_orders)) return data.seller_orders;
+  if (Array.isArray(data)) return data;
+  return [];
 }
 
 // GET /api/manapool/test
@@ -45,6 +55,10 @@ router.get("/test", async (req, res) => {
 router.get("/orders", async (req, res) => {
   try {
     const data = await getSellerOrders(req.query);
+
+    // ManaPool remains the source of truth for order status. Once an order is
+    // shipped, its local picking/allocation records are no longer needed.
+    await deleteShippedManaPoolOrdersAllocations(unwrapManaPoolOrders(data));
 
     res.json({
       success: true,

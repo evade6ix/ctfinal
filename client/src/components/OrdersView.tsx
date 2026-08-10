@@ -166,7 +166,7 @@ function normalizeStatus(value?: string | null) {
 
 function isShippedManaPoolStatus(value?: string | null) {
   const status = normalizeStatus(value);
-  return ["shipped", "sent", "fulfilled"].includes(status);
+  return ["shipped", "sent", "fulfilled", "delivered"].includes(status);
 }
 
 function isRefundedManaPoolStatus(value?: string | null) {
@@ -178,7 +178,14 @@ function getStatusColor(value?: string | null) {
   const status = normalizeStatus(value);
 
   if (status === "hub_pending") return "yellow";
-  if (status === "sent" || status === "shipped" || status === "fulfilled") return "green";
+  if (
+    status === "sent" ||
+    status === "shipped" ||
+    status === "fulfilled" ||
+    status === "delivered"
+  ) {
+    return "green";
+  }
   if (status.includes("refund")) return "red";
   if (status === "cancelled" || status === "canceled") return "red";
 
@@ -764,7 +771,7 @@ export function OrdersView() {
         <div>
           <Title order={2}>Orders</Title>
           <Text c="dimmed" size="sm">
-            Mana Pool seller orders. Shipped orders are hidden automatically. Refunded orders stay visible until you hide them from this view.
+            Mana Pool seller orders. Shipped and delivered orders are removed automatically. Refunded orders stay visible until you hide them from this view.
           </Text>
         </div>
 

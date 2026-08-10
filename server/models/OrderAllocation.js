@@ -116,7 +116,7 @@ const orderAllocationSchema = new mongoose.Schema(
     // manual_review = exact marketplace item missing / not enough stock, no deduction
     // restored = inventory was restored later
     // cancelled = order/allocation cancelled without active deduction
-    // shipped = kept for history after shipment
+    // shipped = legacy value; new ManaPool shipment cleanup deletes the record
     status: {
       type: String,
       enum: ["allocated", "manual_review", "restored", "cancelled", "shipped"],

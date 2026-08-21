@@ -1,0 +1,36 @@
+name: Apply sanitized CTFinal snapshot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-sanitized-snapshot.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replace main with sanitized application snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot_dir="$RUNNER_TEMP/ctfinal-snapshot"
+          mkdir -p "$snapshot_dir"
+          cat .github/snapshot-parts/part-*.b64 | base64 --decode | gzip --decompress | tar -x -C "$snapshot_dir"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan sanitized-main
+          git rm -rf .
+          cp -a "$snapshot_dir/." .
+          git add -A
+          git commit -m "Transform CTFinal into an operations platform"
+          git push --force origin sanitized-main:main

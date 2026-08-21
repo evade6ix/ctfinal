@@ -13,8 +13,30 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <MantineProvider
       defaultColorScheme="dark"
       theme={{
-        primaryColor: "yellow",
-        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+        primaryColor: "gold",
+        primaryShade: 5,
+        defaultRadius: "md",
+        fontFamily:
+          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        headings: {
+          fontFamily:
+            'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          fontWeight: "760",
+        },
+        colors: {
+          gold: [
+            "#fff8e1",
+            "#ffefc2",
+            "#ffdf85",
+            "#ffd04d",
+            "#ffc52a",
+            "#f6b810",
+            "#d99b00",
+            "#ac7800",
+            "#7e5700",
+            "#513700",
+          ],
+        },
       }}
     >
       <Notifications />

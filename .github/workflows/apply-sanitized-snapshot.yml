@@ -1,11 +1,9 @@
 name: Apply sanitized CTFinal snapshot
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/apply-sanitized-snapshot.yml
 
 permissions:
   contents: write

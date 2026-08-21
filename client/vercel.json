@@ -7,10 +7,6 @@
     {
       "source": "/health",
       "destination": "https://ctfinal-production.up.railway.app/health"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
     }
   ]
 }

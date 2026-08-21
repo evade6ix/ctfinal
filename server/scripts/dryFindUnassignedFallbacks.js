@@ -78,9 +78,9 @@ for (let page = 1; page <= MAX_PAGES; page++) {
   if (!orders.length) break;
 
   for (const o of orders) {
-    const orderCode = norm(o.code || o.order_code || o.reference);
-    if (orderCode === norm(ORDER_CODE)) openOrders.push(o);
-  }
+  const orderCode = norm(o.code || o.order_code || o.reference);
+  if (orderCode === norm(ORDER_CODE)) openOrders.push(o);
+}
 
 if (openOrders.length) break;
 }
@@ -115,10 +115,10 @@ for (const order of openOrders) {
     const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const candidates = await InventoryItem.find({
-      name: new RegExp(`^${escapedName}$`, "i"),
-      condition: { $in: [condition, "NM", "Near Mint"] },
-      isFoil,
-    }).lean();
+  name: new RegExp(`^${escapedName}$`, "i"),
+  condition: { $in: [condition, "NM", "Near Mint"] },
+  isFoil,
+}).lean();
 
     const stocked = [];
 
@@ -139,19 +139,18 @@ for (const order of openOrders) {
     }
 
     if (stocked.length) {
-      orderIssues.push({
-        soldCardTraderId: soldId,
-        name,
-        condition,
-        isFoil,
-        setName: a.expansion || null,
-        quantitySold: a.quantity || 0,
-        exactExists: !!exact,
-        exactTotalQuantity: exact?.totalQuantity ?? null,
-        exactLocationQty: exactQty,
-        fallbackMatches: stocked,
-      });
-    }
+  orderIssues.push({
+      soldCardTraderId: soldId,
+      name,
+      condition,
+      isFoil,
+      setName: a.expansion || null,
+      quantitySold: a.quantity || 0,
+      exactExists: !!exact,
+      exactTotalQuantity: exact?.totalQuantity ?? null,
+      exactLocationQty: exactQty,
+      fallbackMatches: stocked,
+    });
   }
 
   if (orderIssues.length) {

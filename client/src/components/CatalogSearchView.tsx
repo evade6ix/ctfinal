@@ -8,7 +8,6 @@ import {
   Group,
   Image,
   Loader,
-  Modal,
   MultiSelect,
   NumberInput,
   Pagination,
@@ -124,7 +123,6 @@ export function CatalogSearchView() {
   const [binError, setBinError] = useState<string | null>(null);
   const [destBinId, setDestBinId] = useState<string | null>(null);
   const [destRow, setDestRow] = useState<number | null>(null);
-  const [pendingPushMode, setPendingPushMode] = useState<PushMode | null>(null);
 
   useEffect(() => {
     try {
@@ -272,42 +270,23 @@ export function CatalogSearchView() {
       .filter((it) => Number.isFinite(Number(it.blueprintId)) && Number(it.quantity) > 0 && typeof it.price === "number" && Number.isFinite(it.price) && it.price > 0);
   }
 
-  function requestPush(mode: PushMode) {
-    if (!staged.length) return;
-    if (!destBinId || destRow == null) {
-      notifications.show({ color: "orange", title: "Destination required", message: "Select a bulk box and row for this batch before pushing live." });
-      return;
-    }
-    if (mode !== "cardtrader" && stagedHasNonMagic) {
-      notifications.show({ color: "orange", title: "CardTrader only", message: "ManaPool is Magic-only. Push Riftbound and other games to CardTrader Only." });
-      return;
-    }
-    const items = buildPushItems();
-    if (!items.length) {
-      notifications.show({ color: "orange", title: "Incomplete batch", message: "Every staged item needs a valid price and quantity." });
-      return;
-    }
-    setPendingPushMode(mode);
-  }
-
   async function pushLive(mode: PushMode) {
+    if (!staged.length) return;
+    if (!destBinId || destRow == null) return alert("Select a bulk box and row for this batch before pushing live.");
+    if (mode !== "cardtrader" && stagedHasNonMagic) return alert("ManaPool is Magic-only. Push Riftbound / non-MTG listings to CardTrader Only.");
     const items = buildPushItems();
+    if (!items.length) return alert("All staged items need a valid price and quantity before pushing live.");
     const config = PUSH_CONFIG[mode];
     try {
       setPushingMode(mode);
-      setPendingPushMode(null);
-      const initiatedBy = window.localStorage.getItem("ctfinal_staff_name") || "local";
-      const res = await fetch(config.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, binId: destBinId, row: destRow, gameId, initiatedBy }) });
+      const res = await fetch(config.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, binId: destBinId, row: destRow, gameId }) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || `${config.label} failed with status ${res.status}.`);
-      if ((data?.failed ?? 0) > 0 || (data?.warnings ?? 0) > 0) {
-        notifications.show({ color: "orange", title: "Batch completed with exceptions", message: `Created ${data?.created ?? 0}, failed ${data?.failed ?? 0}, warnings ${data?.warnings ?? 0}. Review Operation History for details.` });
-        return;
-      }
-      notifications.show({ color: "teal", title: "Listings are live", message: `Pushed ${data?.created ?? 0} listings to ${config.successName}.` });
+      if (!res.ok) return alert(data?.error || `${config.label} failed with status ${res.status}. Check console for details.`);
+      if ((data?.failed ?? 0) > 0) return alert(`Partial push to ${config.successName}: created ${data?.created ?? 0}, failed ${data?.failed ?? 0}. See console for details.`);
+      alert(`Pushed ${data?.created ?? 0} staged listings live on ${config.successName}.`);
       setStaged([]);
     } catch (err: any) {
-      notifications.show({ color: "red", title: `${config.label} failed`, message: err.message || "The marketplace request failed." });
+      alert(err.message || `${config.label} failed`);
     } finally {
       setPushingMode(null);
     }
@@ -338,9 +317,9 @@ export function CatalogSearchView() {
           <Group gap="sm">
             <Text size="xs" c="dimmed">Default foil</Text>
             <Switch size="xs" checked={foilDefault} onChange={(e) => setFoilDefault(e.currentTarget.checked)} />
-            {!stagedHasNonMagic && <Button size="sm" radius="xl" leftSection={<IconRocket size={14} />} disabled={pushDisabled} loading={pushingMode === "all"} onClick={() => requestPush("all")}>Push Live (All)</Button>}
-            {!stagedHasNonMagic && <Button size="sm" radius="xl" variant="light" disabled={pushDisabled} loading={pushingMode === "manapool"} onClick={() => requestPush("manapool")}>ManaPool Only</Button>}
-            <Button size="sm" radius="xl" variant="light" disabled={pushDisabled} loading={pushingMode === "cardtrader"} onClick={() => requestPush("cardtrader")}>CardTrader Only</Button>
+            {!stagedHasNonMagic && <Button size="sm" radius="xl" leftSection={<IconRocket size={14} />} disabled={pushDisabled} loading={pushingMode === "all"} onClick={() => pushLive("all")}>Push Live (All)</Button>}
+            {!stagedHasNonMagic && <Button size="sm" radius="xl" variant="light" disabled={pushDisabled} loading={pushingMode === "manapool"} onClick={() => pushLive("manapool")}>ManaPool Only</Button>}
+            <Button size="sm" radius="xl" variant="light" disabled={pushDisabled} loading={pushingMode === "cardtrader"} onClick={() => pushLive("cardtrader")}>CardTrader Only</Button>
           </Group>
         </Group>
         {stagedHasNonMagic && <Text size="xs" c="dimmed" mt="xs">ManaPool is Magic-only. Riftbound and other non-MTG games will only be pushed to CardTrader.</Text>}
@@ -415,29 +394,6 @@ export function CatalogSearchView() {
           )}
         </Tabs.Panel>
       </Tabs>
-      <Modal
-        opened={pendingPushMode != null}
-        onClose={() => setPendingPushMode(null)}
-        title="Review marketplace push"
-        centered
-        radius="lg"
-      >
-        <Stack>
-          <Alert color="yellow" icon={<IconAlertTriangle size={18} />}>
-            This action creates live marketplace listings and adds the cards to local inventory.
-          </Alert>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Destination</Text><Text size="sm" fw={700}>{bins.find((bin) => bin.value === destBinId)?.label || "Selected bin"} · Row {destRow}</Text></Group>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Listings</Text><Text size="sm" fw={700}>{staged.length}</Text></Group>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Physical cards</Text><Text size="sm" fw={700}>{stagedTotals.totalQty}</Text></Group>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Inventory value</Text><Text size="sm" fw={700}>{money(stagedTotals.totalValue)}</Text></Group>
-          <Group justify="flex-end" mt="sm">
-            <Button variant="default" onClick={() => setPendingPushMode(null)}>Cancel</Button>
-            <Button color="yellow" c="dark.9" leftSection={<IconRocket size={16} />} onClick={() => pendingPushMode && pushLive(pendingPushMode)}>
-              Confirm {pendingPushMode ? PUSH_CONFIG[pendingPushMode].label : "push"}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
     </Stack>
   );
 }

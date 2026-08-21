@@ -3,7 +3,6 @@ import express from "express";
 import { ct } from "../ctClient.js";
 import { OrderAllocation } from "../models/OrderAllocation.js";
 import { InventoryItem } from "../models/InventoryItem.js";
-import { recordCompletedOperation } from "../services/operationRuns.js";
 
 const router = express.Router();
 
@@ -462,7 +461,6 @@ router.get("/", async (req, res) => {
  * If ORDER_SYNC_CUTOFF is missing, the safe default is today at midnight Toronto.
  */
 router.post("/sync", async (req, res) => {
-  const startedAt = new Date();
   try {
     const summary = await syncEligibleCardTraderSellerOrders({
       cutoff: req.body?.cutoff || req.query?.cutoff,
@@ -473,25 +471,6 @@ router.post("/sync", async (req, res) => {
     }
 
     console.log("✅ [ORDERS] safe sync summary", summary);
-    if (req.get("X-CTFinal-Trigger") !== "auto-worker") {
-      await recordCompletedOperation({
-        kind: "order-sync",
-        label: "Manual CardTrader order synchronization",
-        source: "cardtrader",
-        trigger: "manual",
-        initiatedBy: String(req.body?.initiatedBy || "local"),
-        startedAt,
-        status: summary.failed ? "completed_with_errors" : "completed",
-        summary: {
-          fetchedOrders: summary.fetchedOrders,
-          eligibleOrders: summary.eligibleOrders,
-          reconciled: summary.reconciled,
-          failed: summary.failed,
-          cutoff: summary.cutoff,
-        },
-        errors: (summary.results || []).filter((result) => !result.ok),
-      });
-    }
     res.json(summary);
   } catch (err) {
     console.error("❌ /api/orders/sync failed:", err?.response?.data || err);

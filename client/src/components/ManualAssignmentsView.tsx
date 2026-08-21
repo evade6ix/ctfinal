@@ -166,9 +166,7 @@ export function ManualAssignmentsView() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             inventoryItemIds,
-            manuallyAssignedBy:
-              window.localStorage.getItem("ctfinal_staff_name") ||
-              "Manual Assignments UI",
+            manuallyAssignedBy: "Manual Assignments UI",
           }),
         }
       );

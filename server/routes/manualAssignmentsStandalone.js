@@ -1,5 +1,4 @@
 import express from "express";
-import { recordCompletedOperation } from "../services/operationRuns.js";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import { OrderAllocation } from "../models/OrderAllocation.js";
@@ -198,8 +197,6 @@ async function syncOne(itemId, context) {
 router.post("/:allocationId/assign", async (req, res, next) => {
   if (supportsTransactions()) return next();
 
-  const startedAt = new Date();
-
   const allocationId = String(req.params.allocationId || "");
   const inventoryItemIds = [
     ...new Set(
@@ -390,7 +387,7 @@ router.post("/:allocationId/assign", async (req, res, next) => {
       });
     }
 
-    const response = {
+    return res.json({
       ok: true,
       standaloneMongoFallback: true,
       allocationId: finalized._id.toString(),
@@ -402,28 +399,7 @@ router.post("/:allocationId/assign", async (req, res, next) => {
       deletedStaleManualReviews: staleCleanupError ? 0 : staleIds.length,
       staleCleanupError,
       manaPoolSyncs,
-    };
-
-    await recordCompletedOperation({
-      kind: "manual-assignment",
-      label: "Resolved an unassigned order line",
-      source: "inventory",
-      trigger: "manual",
-      initiatedBy: manuallyAssignedBy,
-      startedAt,
-      status: manaPoolSyncs.some((sync) => !sync.ok) || staleCleanupError
-        ? "completed_with_errors"
-        : "completed",
-      summary: {
-        allocationId: finalized._id.toString(),
-        orderId: finalized.orderId,
-        requestedQuantity,
-        inventoryItemsUpdated: updatedItems.length,
-      },
-      errors: manaPoolSyncs.filter((sync) => !sync.ok),
     });
-
-    return res.json(response);
   } catch (error) {
     const rollbackErrors = [];
     if (!completed && inventoryChanged) {

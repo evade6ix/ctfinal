@@ -1,5 +1,4 @@
 import express from "express";
-import { recordCompletedOperation } from "../services/operationRuns.js";
 import mongoose from "mongoose";
 import { OrderAllocation } from "../models/OrderAllocation.js";
 import { InventoryItem } from "../models/InventoryItem.js";
@@ -432,7 +431,6 @@ router.get("/:allocationId/candidates", async (req, res) => {
 });
 
 router.post("/:allocationId/assign", async (req, res) => {
-  const startedAt = new Date();
   const inventoryItemIds = [
     ...new Set(
       (Array.isArray(req.body?.inventoryItemIds) ? req.body.inventoryItemIds : [])
@@ -608,25 +606,6 @@ router.post("/:allocationId/assign", async (req, res) => {
         error: result?.error || null,
       });
     }
-
-    await recordCompletedOperation({
-      kind: "manual-assignment",
-      label: "Resolved an unassigned order line",
-      source: "inventory",
-      trigger: "manual",
-      initiatedBy: manuallyAssignedBy,
-      startedAt,
-      status: manaPoolSyncs.some((sync) => !sync.ok)
-        ? "completed_with_errors"
-        : "completed",
-      summary: {
-        allocationId: outcome.allocationId,
-        orderId: outcome.orderId,
-        requestedQuantity: outcome.requestedQuantity,
-        inventoryItemsUpdated: outcome.updatedInventoryItems.length,
-      },
-      errors: manaPoolSyncs.filter((sync) => !sync.ok),
-    });
 
     return res.json({ ok: true, ...outcome, manaPoolSyncs });
   } catch (error) {

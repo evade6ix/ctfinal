@@ -6,7 +6,6 @@ import {
   getManaPoolOrderStatus,
   isShippedManaPoolOrder,
 } from "./manapoolOrderCleanup.js";
-import { startOperationRun, finishOperationRun } from "./operationRuns.js";
 
 let timer = null;
 let running = false;
@@ -152,7 +151,6 @@ async function runCardTraderAutoSync({ baseUrl }) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-CTFinal-Trigger": "auto-worker",
     },
   });
 
@@ -326,12 +324,6 @@ async function runAutoSyncCycle({ port, trigger = "interval" }) {
 
   const startedAt = new Date();
   const baseUrl = getBaseUrl(port);
-  const operation = await startOperationRun({
-    kind: "order-sync",
-    label: "Marketplace order synchronization",
-    source: "marketplaces",
-    trigger,
-  });
 
   console.log("[AUTO-SYNC] Starting cycle", {
     cycleNumber,
@@ -369,16 +361,6 @@ async function runAutoSyncCycle({ port, trigger = "interval" }) {
 
     summary.finishedAt = new Date().toISOString();
     summary.durationMs = Date.now() - startedAt.getTime();
-
-    const errors = [summary.cardTrader, summary.manaPool]
-      .filter((result) => result && result.ok === false)
-      .map((result) => ({ error: result.error || result.data || "Marketplace sync failed" }));
-
-    await finishOperationRun(operation, {
-      status: errors.length ? "completed_with_errors" : "completed",
-      summary,
-      errors,
-    });
 
     console.log("[AUTO-SYNC] Cycle complete", summary);
   } finally {

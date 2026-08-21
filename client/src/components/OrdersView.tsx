@@ -1,12 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
   Badge,
   Box,
   Button,
   Group,
   Loader,
-  Modal,
   Paper,
   ScrollArea,
   Stack,
@@ -258,7 +256,6 @@ export function OrdersView() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [confirmSync, setConfirmSync] = useState(false);
 
   const [pickedMap, setPickedMap] = useState<
     Record<string | number, Record<string | number, boolean>>
@@ -683,19 +680,18 @@ export function OrdersView() {
   };
 
   const handleSyncOrders = async () => {
+    const confirmed = window.confirm(
+      "This will run the safe order sync. It can still deduct inventory for NEW exact CardTrader ID matches. Make sure ORDER_SYNC_CUTOFF is set in server/.env before continuing. Continue?"
+    );
+
+    if (!confirmed) return;
+
     try {
       setSyncing(true);
-      setConfirmSync(false);
       setSyncMessage(null);
       setSyncError(null);
 
-      const res = await fetch("/api/orders/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          initiatedBy: window.localStorage.getItem("ctfinal_staff_name") || "local",
-        }),
-      });
+      const res = await fetch("/api/orders/sync", { method: "POST" });
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -739,7 +735,7 @@ export function OrdersView() {
           orderId,
           orderItemId: item.id,
           cardTraderId: ctId,
-          pickedBy: window.localStorage.getItem("ctfinal_staff_name") || "manual",
+          pickedBy: "manual",
           source: "manapool",
         }),
       });
@@ -802,7 +798,7 @@ export function OrdersView() {
 
           <Button
             leftSection={<IconArrowsDownUp size={16} />}
-            onClick={() => setConfirmSync(true)}
+            onClick={handleSyncOrders}
             loading={syncing}
             variant="filled"
             color="red"
@@ -1031,18 +1027,6 @@ export function OrdersView() {
       )}
 
       {viewMode === "daily" && <OrdersDailyView />}
-      <Modal opened={confirmSync} onClose={() => setConfirmSync(false)} title="Run CardTrader order sync" centered radius="lg">
-        <Stack>
-          <Alert color="yellow" title="Inventory-affecting operation">
-            CTFinal will fetch eligible CardTrader orders and deduct inventory only for new exact listing matches. Existing allocation records prevent duplicate deductions.
-          </Alert>
-          <Text size="sm" c="dimmed">The configured order cutoff remains active. A durable result, including any failures, will be written to Operation History.</Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setConfirmSync(false)}>Cancel</Button>
-            <Button color="red" leftSection={<IconArrowsDownUp size={16} />} onClick={handleSyncOrders}>Run sync now</Button>
-          </Group>
-        </Stack>
-      </Modal>
     </Stack>
   );
 }

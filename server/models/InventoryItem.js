@@ -101,11 +101,6 @@ const inventoryItemSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-inventoryItemSchema.index({ game: 1, setCode: 1, name: 1 });
-inventoryItemSchema.index({ condition: 1, isFoil: 1 });
-inventoryItemSchema.index({ totalQuantity: 1 });
-inventoryItemSchema.index({ "locations.bin": 1, "locations.row": 1 });
-
 export const InventoryItem = mongoose.model(
   "InventoryItem",
   inventoryItemSchema

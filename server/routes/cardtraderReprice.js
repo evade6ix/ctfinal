@@ -1,11 +1,6 @@
 import express from "express";
 import axios from "axios";
 import { randomUUID } from "crypto";
-import {
-  finishOperationRun,
-  recordCompletedOperation,
-  startOperationRun,
-} from "../services/operationRuns.js";
 
 const router = express.Router();
 
@@ -518,25 +513,8 @@ function startPreviewJob(options) {
   pushLog(job, "Preview job queued.");
 
   setImmediate(async () => {
-    const operation = await startOperationRun({
-      kind: "repricer-preview",
-      label: "CardTrader repricing preview",
-      source: "cardtrader",
-      trigger: "manual",
-      initiatedBy: String(options?.initiatedBy || "local"),
-      summary: { jobId: job.id },
-    });
-
     try {
       await buildRepricePlan(options, job);
-      await finishOperationRun(operation, {
-        summary: {
-          jobId: job.id,
-          scanned: job.result?.scanned || 0,
-          changed: job.result?.changed || 0,
-          skipped: job.result?.skipped || 0,
-        },
-      });
     } catch (err) {
       job.status = "failed";
       job.stage = "Failed";
@@ -544,11 +522,6 @@ function startPreviewJob(options) {
       pushLog(job, `Preview failed: ${job.error}`);
       updateJobProgress(job);
       console.error("CardTrader repricer preview job failed", err?.response?.data || err);
-      await finishOperationRun(operation, {
-        status: "failed",
-        errors: [{ message: job.error }],
-        summary: { jobId: job.id },
-      });
     }
   });
 
@@ -584,7 +557,6 @@ router.post("/preview", async (req, res) => {
 });
 
 router.post("/apply", async (req, res) => {
-  const startedAt = new Date();
   try {
     if (!TOKEN) return res.status(500).json({ error: "CARDTRADER_TOKEN missing" });
 
@@ -615,32 +587,14 @@ router.post("/apply", async (req, res) => {
       }
     }
 
-    const response = {
+    res.json({
       ...plan,
       mode: "apply",
       attemptedUpdates: changesToApply.length,
       updated,
       failed,
       results,
-    };
-
-    await recordCompletedOperation({
-      kind: "repricer-apply",
-      label: "Applied CardTrader price updates",
-      source: "cardtrader",
-      trigger: "manual",
-      initiatedBy: String(req.body?.initiatedBy || "local"),
-      startedAt,
-      status: failed ? "completed_with_errors" : "completed",
-      summary: { attempted: changesToApply.length, updated, failed },
-      errors: results.filter((result) => !result.ok).map((result) => ({
-        productId: result.productId,
-        name: result.name,
-        message: result.error,
-      })),
     });
-
-    res.json(response);
   } catch (err) {
     console.error("CardTrader repricer apply failed", err?.response?.data || err);
     res.status(500).json({ error: "repricer_apply_failed", details: err?.response?.data || err.message });

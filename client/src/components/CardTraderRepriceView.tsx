@@ -6,7 +6,6 @@ import {
   Button,
   Group,
   Loader,
-  Modal,
   NumberInput,
   Paper,
   Progress,
@@ -15,7 +14,6 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
 import { IconRefresh, IconRocket, IconAlertTriangle } from "@tabler/icons-react";
 
 type RepriceChange = {
@@ -106,7 +104,6 @@ export function CardTraderRepriceView() {
   const [limit, setLimit] = useState<number | null>(null);
   const [applyLimit, setApplyLimit] = useState<number | null>(null);
   const [minPriceCents, setMinPriceCents] = useState<number | null>(1);
-  const [confirmApply, setConfirmApply] = useState(false);
 
   const shownRows = useMemo(() => {
     const source = applyResult?.results?.length ? applyResult.results : preview?.changes || [];
@@ -138,7 +135,6 @@ export function CardTraderRepriceView() {
           limit: limit || undefined,
           beatByCents: 1,
           minPriceCents: minPriceCents || 1,
-          initiatedBy: window.localStorage.getItem("ctfinal_staff_name") || "local",
         }),
       });
 
@@ -175,9 +171,13 @@ export function CardTraderRepriceView() {
   async function runApply() {
     if (!preview?.changes?.length) return;
 
+    const yes = window.confirm(
+      `This will update ${applyLimit || preview.changes.length} CardTrader base price(s). CardTrader will calculate the final marketplace/cart fee layer. This does NOT touch ManaPool. Continue?`
+    );
+    if (!yes) return;
+
     try {
       setLoadingApply(true);
-      setConfirmApply(false);
       setError(null);
 
       const res = await fetch("/api/ct/reprice/apply", {
@@ -188,7 +188,6 @@ export function CardTraderRepriceView() {
           applyLimit: applyLimit || undefined,
           beatByCents: 1,
           minPriceCents: minPriceCents || 1,
-          initiatedBy: window.localStorage.getItem("ctfinal_staff_name") || "local",
         }),
       });
 
@@ -196,11 +195,6 @@ export function CardTraderRepriceView() {
       if (!res.ok) throw new Error(data?.error || "Apply failed");
       setApplyResult(data);
       setPreview(data);
-      notifications.show({
-        color: data.failed ? "orange" : "teal",
-        title: data.failed ? "Repricing completed with exceptions" : "CardTrader prices updated",
-        message: `${data.updated ?? 0} updated, ${data.failed ?? 0} failed. The complete result is stored in Operation History.`,
-      });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Apply failed");
     } finally {
@@ -271,7 +265,7 @@ export function CardTraderRepriceView() {
             leftSection={<IconRocket size={16} />}
             loading={loadingApply}
             disabled={loadingPreview || !preview?.changes?.length}
-            onClick={() => setConfirmApply(true)}
+            onClick={runApply}
           >
             Apply to CardTrader
           </Button>
@@ -396,20 +390,6 @@ export function CardTraderRepriceView() {
           )}
         </Paper>
       )}
-      <Modal opened={confirmApply} onClose={() => setConfirmApply(false)} title="Confirm CardTrader repricing" centered radius="lg">
-        <Stack>
-          <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
-            This updates live CardTrader base prices. ManaPool prices and local inventory quantities are not changed.
-          </Alert>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Products to update</Text><Text fw={800}>{Math.min(applyLimit || preview?.changes.length || 0, preview?.changes.length || 0)}</Text></Group>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Minimum base price</Text><Text fw={800}>{minPriceCents || 1}¢</Text></Group>
-          <Group justify="space-between"><Text size="sm" c="dimmed">Pricing rule</Text><Text fw={800}>Lowest eligible − 1¢</Text></Group>
-          <Group justify="flex-end" mt="sm">
-            <Button variant="default" onClick={() => setConfirmApply(false)}>Cancel</Button>
-            <Button color="green" leftSection={<IconRocket size={16} />} onClick={runApply}>Apply live prices</Button>
-          </Group>
-        </Stack>
-      </Modal>
     </Stack>
   );
 }

@@ -4,7 +4,6 @@ import {
   Box,
   Group,
   Loader,
-  Pagination,
   ScrollArea,
   Table,
   Text,
@@ -27,8 +26,7 @@ const API_BASE = "/api";
 export function ChangeLogsView() {
   const [logs, setLogs] = useState<ChangeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [page] = useState(1); // we can add pagination later
 
   async function fetchLogs() {
     try {
@@ -36,7 +34,6 @@ export function ChangeLogsView() {
       const res = await fetch(`${API_BASE}/changelog?page=${page}&limit=50`);
       const data = await res.json();
       setLogs(data.logs || []);
-      setTotalPages(Math.max(1, Number(data.totalPages) || 1));
     } catch (err) {
       console.error("Failed to fetch changelog", err);
     } finally {
@@ -94,7 +91,6 @@ export function ChangeLogsView() {
       )}
 
       {logs.length > 0 && (
-        <>
         <ScrollArea>
           <Table striped highlightOnHover withColumnBorders>
             <Table.Thead>
@@ -131,12 +127,6 @@ export function ChangeLogsView() {
             </Table.Tbody>
           </Table>
         </ScrollArea>
-        {totalPages > 1 && (
-          <Group justify="flex-end" mt="md">
-            <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
-          </Group>
-        )}
-        </>
       )}
     </Box>
   );

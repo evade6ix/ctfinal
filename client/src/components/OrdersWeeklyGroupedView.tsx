@@ -319,7 +319,7 @@ export function OrdersWeeklyGroupedView() {
             orderItemId: allocationOrderItemId,
             cardTraderId: item.cardTraderId,
             source: "cardtrader",
-            pickedBy: window.localStorage.getItem("ctfinal_staff_name") || "local",
+            pickedBy: "local",
           }),
         });
 

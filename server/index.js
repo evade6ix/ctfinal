@@ -29,9 +29,6 @@ import manualAssignmentsRouter from "./routes/manualAssignments.js";
 import orderAllocationsRouter from "./routes/orderAllocations.js";
 import manapoolRouter from "./routes/manapool.js";
 import stagedPushRouter from "./routes/stagedPush.js";
-import operationsRouter from "./routes/operations.js";
-import pickingRouter from "./routes/picking.js";
-import settingsRouter from "./routes/settings.js";
 
 // Auto-sync worker
 import { startOrderAutoSyncWorker } from "./services/orderAutoSyncWorker.js";
@@ -52,13 +49,7 @@ app.use(compression());
 
 // Healthcheck
 app.get("/health", (req, res) => {
-  const databaseConnected = mongoose.connection.readyState === 1;
-  res.status(databaseConnected ? 200 : 503).json({
-    ok: databaseConnected,
-    database: databaseConnected ? "connected" : "disconnected",
-    uptimeSeconds: Math.round(process.uptime()),
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ ok: true });
 });
 
 // API routes
@@ -88,9 +79,6 @@ app.use("/api/manual-assignments", manualAssignmentsListCompatRouter);
 app.use("/api/manual-assignments", manualAssignmentsRouter);
 app.use("/api/order-allocations", orderAllocationsRouter);
 app.use("/api/staged-push", stagedPushRouter);
-app.use("/api/operations", operationsRouter);
-app.use("/api/picking", pickingRouter);
-app.use("/api/settings", settingsRouter);
 
 // Mana Pool routes
 app.use("/api/manapool", manapoolRouter);

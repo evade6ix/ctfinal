@@ -10,8 +10,8 @@ const router = express.Router();
  */
 router.get("/", async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page || "1", 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10) || 50));
+    const page = parseInt(req.query.page || "1", 10);
+    const limit = parseInt(req.query.limit || "50", 10);
 
     const [logs, total] = await Promise.all([
       ChangeLog.find()

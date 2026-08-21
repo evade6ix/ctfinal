@@ -177,7 +177,6 @@ orderAllocationSchema.index(
 
 // Helpful lookup for older UI/search flows
 orderAllocationSchema.index({ orderId: 1, cardTraderId: 1 });
-orderAllocationSchema.index({ source: 1, status: 1, picked: 1, createdAt: 1 });
 
 export const OrderAllocation = mongoose.model(
   "OrderAllocation",

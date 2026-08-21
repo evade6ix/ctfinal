@@ -3,7 +3,6 @@ import axios from "axios";
 import { InventoryItem } from "../models/InventoryItem.js";
 import { applyStagedToInventory } from "../utils/applyStagedToInventory.js";
 import { syncInventoryItemsToManaPool } from "../services/manapoolInventorySync.js";
-import { recordCompletedOperation } from "../services/operationRuns.js";
 
 const router = express.Router();
 
@@ -194,7 +193,6 @@ async function markManaPoolSyncError(mongoInventoryItem, manaPoolResult) {
 }
 
 async function pushStaged(req, res, mode) {
-  const startedAt = new Date();
   try {
     const { items, binId, row, gameId } = req.body || {};
 
@@ -398,7 +396,7 @@ async function pushStaged(req, res, mode) {
       }
     }
 
-    const response = {
+    return res.json({
       ok: true,
       mode,
       attempted: items.length,
@@ -406,24 +404,7 @@ async function pushStaged(req, res, mode) {
       failed,
       warnings,
       results,
-    };
-
-    await recordCompletedOperation({
-      kind: "catalog-push",
-      label: `Pushed staged listings to ${mode}`,
-      source: mode,
-      trigger: "manual",
-      initiatedBy: String(req.body?.initiatedBy || "local"),
-      startedAt,
-      status: failed || warnings ? "completed_with_errors" : "completed",
-      summary: { mode, attempted: items.length, created, failed, warnings },
-      errors: results.filter((result) => !result.ok || result.warning).map((result) => ({
-        blueprintId: result.blueprintId,
-        message: result.error || result.warningMessage,
-      })),
     });
-
-    return res.json(response);
   } catch (err) {
     console.error(`Error in staged push (${mode})`, err);
     return res.status(500).json({ error: err?.message || "Server error" });

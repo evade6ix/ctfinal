@@ -162,16 +162,6 @@ export function CardListView() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<CardListItem | null>(null);
-  const [deleteArmed, setDeleteArmed] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
-
-  useEffect(() => {
-    const globalSearch = window.localStorage.getItem("ctfinal_global_search");
-    if (globalSearch) {
-      setQuery(globalSearch);
-      window.localStorage.removeItem("ctfinal_global_search");
-    }
-  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -272,7 +262,14 @@ export function CardListView() {
 
   async function deleteSelectedItem() {
     if (!selectedItem || deleting) return;
-    if (deleteConfirmation !== selectedItem.name) return;
+
+    const confirmed = window.confirm(
+      `Permanently delete "${selectedItem.name}" from CTFinal's MongoDB inventory?\n\n` +
+        "This removes the local inventory record and all of its saved bin locations. " +
+        "It does not delete anything from CardTrader or ManaPool."
+    );
+
+    if (!confirmed) return;
 
     const itemToDelete = selectedItem;
 
@@ -292,8 +289,6 @@ export function CardListView() {
       }
 
       setSelectedItem(null);
-      setDeleteArmed(false);
-      setDeleteConfirmation("");
       setSuccessMessage(
         `${itemToDelete.name} was permanently removed from CTFinal's MongoDB inventory.`
       );
@@ -577,7 +572,7 @@ export function CardListView() {
 
       <Modal
         opened={selectedItem !== null}
-        onClose={() => { setSelectedItem(null); setDeleteArmed(false); setDeleteConfirmation(""); }}
+        onClose={() => setSelectedItem(null)}
         title={selectedItem?.name || "Card details"}
         size="lg"
         centered
@@ -707,15 +702,6 @@ export function CardListView() {
 
             <Divider />
 
-            {deleteArmed && (
-              <Alert color="red" title="Permanent local deletion">
-                <Stack gap="xs">
-                  <Text size="sm">Type <strong>{selectedItem.name}</strong> to confirm removal of the MongoDB record and every saved bin location.</Text>
-                  <TextInput value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.currentTarget.value)} placeholder={selectedItem.name} />
-                </Stack>
-              </Alert>
-            )}
-
             <Group justify="space-between" align="center" wrap="wrap">
               <Text size="xs" c="dimmed" maw={390}>
                 This permanently removes the local MongoDB inventory record and its
@@ -727,10 +713,9 @@ export function CardListView() {
                 variant="filled"
                 leftSection={<IconTrash size={17} />}
                 loading={deleting}
-                disabled={deleteArmed && deleteConfirmation !== selectedItem.name}
-                onClick={() => deleteArmed ? deleteSelectedItem() : setDeleteArmed(true)}
+                onClick={deleteSelectedItem}
               >
-                {deleteArmed ? "Confirm permanent deletion" : "Delete from MongoDB"}
+                Delete from MongoDB
               </Button>
             </Group>
           </Stack>

@@ -1,0 +1,17 @@
+# === NIXPACKS CONFIG FOR CardTrader APP BACKEND ===
+
+# Use Node 20 (stable, supports native fetch)
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+# Install dependencies inside /server
+[phases.install]
+cmd = "cd server && npm install"
+
+# Build phase (we are NOT building the client here)
+[phases.build]
+cmd = "echo 'No build step for backend-only service'"
+
+# Start the Express server
+[start]
+cmd = "cd server && npm start"

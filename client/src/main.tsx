@@ -11,35 +11,47 @@ import "./styles.css";
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <MantineProvider
-      defaultColorScheme="dark"
+      defaultColorScheme="light"
       theme={{
-        primaryColor: "gold",
-        primaryShade: 5,
-        defaultRadius: "md",
+        primaryColor: "ink",
+        primaryShade: 7,
+        defaultRadius: "sm",
         fontFamily:
           'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         headings: {
           fontFamily:
             'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          fontWeight: "760",
+          fontWeight: "700",
         },
         colors: {
+          ink: [
+            "#f7f7f8",
+            "#ededf0",
+            "#d8d9de",
+            "#b8bac2",
+            "#8b8e99",
+            "#646772",
+            "#42454e",
+            "#24262c",
+            "#17181c",
+            "#0d0e10",
+          ],
           gold: [
-            "#fff8e1",
-            "#ffefc2",
-            "#ffdf85",
-            "#ffd04d",
-            "#ffc52a",
-            "#f6b810",
-            "#d99b00",
-            "#ac7800",
-            "#7e5700",
-            "#513700",
+            "#fff9e8",
+            "#fdf0c4",
+            "#f9dfa0",
+            "#f1c96f",
+            "#e7ae3c",
+            "#d59622",
+            "#b87816",
+            "#8f5c12",
+            "#67420f",
+            "#3f290b",
           ],
         },
       }}
     >
-      <Notifications />
+      <Notifications position="bottom-right" />
       <App />
     </MantineProvider>
   </React.StrictMode>

@@ -14,14 +14,14 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       defaultColorScheme="light"
       theme={{
         primaryColor: "ink",
-        primaryShade: 7,
-        defaultRadius: "sm",
+        primaryShade: 8,
+        defaultRadius: "md",
         fontFamily:
           'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         headings: {
           fontFamily:
             'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          fontWeight: "700",
+          fontWeight: "680",
         },
         colors: {
           ink: [

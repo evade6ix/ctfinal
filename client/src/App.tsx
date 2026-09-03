@@ -100,37 +100,19 @@ function App() {
   return (
     <AppShell
       className="ct-app"
-      header={{ height: 58 }}
       navbar={{ width: 236, breakpoint: "sm", collapsed: { mobile: !opened } }}
-      padding={{ base: 14, sm: 22, lg: 30 }}
+      padding={0}
       transitionDuration={160}
-      classNames={{ header: "ct-header", navbar: "ct-navbar", main: "ct-main" }}
+      classNames={{ navbar: "ct-navbar", main: "ct-main" }}
     >
-      <AppShell.Header>
-        <Group h="100%" px={{ base: "md", sm: "lg" }} wrap="nowrap" gap={0}>
-          <Group className="header-brand" gap="sm" wrap="nowrap">
-            <Burger
-              opened={opened}
-              onClick={toggle}
-              hiddenFrom="sm"
-              size="sm"
-              aria-label="Toggle navigation"
-            />
-            <Box className="brand-symbol" aria-hidden="true" />
-            <Text className="brand-name">CTFinal</Text>
-          </Group>
-
-          <Group className="header-section" gap={8} wrap="nowrap">
-            <Text className="section-parent">{activeSection.eyebrow}</Text>
-            <Text className="breadcrumb-slash">/</Text>
-            <Text className="section-name">{activeSection.title}</Text>
-          </Group>
-        </Group>
-      </AppShell.Header>
-
       <AppShell.Navbar aria-label="Primary navigation">
+        <Group className="sidebar-brand" gap="sm" wrap="nowrap">
+          <Box className="brand-symbol" aria-hidden="true" />
+          <Text className="brand-name">CTFinal</Text>
+        </Group>
+
         <ScrollArea type="auto" className="nav-scroll" scrollbarSize={5}>
-          <Stack gap={28} px="sm" py="lg">
+          <Stack gap={30} px={12} py={18}>
             {NAVIGATION_GROUPS.map((group) => (
               <Box key={group.label}>
                 <Text className="nav-group-label">{group.label}</Text>
@@ -158,22 +140,42 @@ function App() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        <Box className="page-frame">
-          {section === "dashboard" && <CatalogSearchView />}
-          {section === "card-list" && <CardListView />}
-          {section === "inventory" && <InventoryBinAssignmentView />}
-          {section === "bins" && <InventoryBinsView />}
-          {section === "repricer" && <CardTraderRepriceView />}
-          {section === "orders" && <OrdersView />}
-          {section === "manual-assignments" && <ManualAssignmentsView />}
-          {section === "orders-weekly" && <OrdersWeeklyGroupedView />}
-          {section === "changelogs" && <ChangeLogsView />}
-          {section === "settings" && (
-            <Paper className="settings-placeholder" withBorder p={{ base: "xl", sm: 32 }}>
-              <Title order={2}>Settings</Title>
-              <Text c="dimmed" mt={6}>Settings aren’t available yet.</Text>
-            </Paper>
-          )}
+        <Box className="content-toolbar">
+          <Group h="100%" px={{ base: 16, sm: 24, lg: 32 }} gap="sm" wrap="nowrap">
+            <Burger
+              opened={opened}
+              onClick={toggle}
+              hiddenFrom="sm"
+              size="sm"
+              aria-label="Toggle navigation"
+            />
+            <Text className="mobile-brand" hiddenFrom="sm">CTFinal</Text>
+            <Group className="toolbar-breadcrumb" gap={7} wrap="nowrap">
+              <Text className="section-parent">{activeSection.eyebrow}</Text>
+              <Text className="breadcrumb-slash">/</Text>
+              <Text className="section-name">{activeSection.title}</Text>
+            </Group>
+          </Group>
+        </Box>
+
+        <Box className="content-area">
+          <Box className="page-frame">
+            {section === "dashboard" && <CatalogSearchView />}
+            {section === "card-list" && <CardListView />}
+            {section === "inventory" && <InventoryBinAssignmentView />}
+            {section === "bins" && <InventoryBinsView />}
+            {section === "repricer" && <CardTraderRepriceView />}
+            {section === "orders" && <OrdersView />}
+            {section === "manual-assignments" && <ManualAssignmentsView />}
+            {section === "orders-weekly" && <OrdersWeeklyGroupedView />}
+            {section === "changelogs" && <ChangeLogsView />}
+            {section === "settings" && (
+              <Paper className="settings-placeholder" withBorder p={{ base: "xl", sm: 32 }}>
+                <Title order={2}>Settings</Title>
+                <Text c="dimmed" mt={6}>Settings aren’t available yet.</Text>
+              </Paper>
+            )}
+          </Box>
         </Box>
       </AppShell.Main>
     </AppShell>

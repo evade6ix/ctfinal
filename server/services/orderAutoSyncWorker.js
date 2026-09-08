@@ -187,7 +187,7 @@ async function runManaPoolAutoSync() {
     };
   }
 
-  const limit = intEnv("MANAPOOL_AUTO_SYNC_LIMIT", 50);
+  const limit = Math.max(500, intEnv("MANAPOOL_AUTO_SYNC_LIMIT", 500));
   const cutoffDate = getManaPoolCutoffDate();
 
   const listData = await getSellerOrders({

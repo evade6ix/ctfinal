@@ -372,12 +372,30 @@ export function useManaPoolOrders() {
           const manapoolInventoryId = getManaPoolInventoryId(item);
           const itemScryfallId = getItemScryfallId(item);
 
+          const rawLegacyOrderItemId =
+            item?.id ??
+            item?.order_item_id ??
+            item?.order_line_id ??
+            item?.line_id ??
+            item?.uuid ??
+            item?.seller_order_item_id ??
+            null;
+
+          const legacyNumericOrderItemId =
+            rawLegacyOrderItemId != null &&
+            Number.isFinite(Number(rawLegacyOrderItemId))
+              ? Number(rawLegacyOrderItemId)
+              : null;
+
           let allocation =
             takeAllocation(byMarketplaceId.get(marketplaceOrderItemId)) ||
             (manapoolInventoryId
               ? takeAllocation(byInventoryId.get(manapoolInventoryId))
               : null) ||
-            takeAllocation(byOrderItemId.get(numericOrderItemId));
+            takeAllocation(byOrderItemId.get(numericOrderItemId)) ||
+            (legacyNumericOrderItemId != null
+              ? takeAllocation(byOrderItemId.get(legacyNumericOrderItemId))
+              : null);
 
           if (!allocation && itemScryfallId) {
             const bucket = byScryfallId.get(itemScryfallId) || [];
@@ -434,7 +452,7 @@ export function useManaPoolOrders() {
             );
 
           return {
-            id: numericOrderItemId,
+            id: allocation?.orderItemId ?? numericOrderItemId,
             marketplaceOrderItemId,
             source: "manapool",
             cardTraderId:

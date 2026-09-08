@@ -5,6 +5,7 @@ import {
   Button,
   Divider,
   Group,
+  HoverCard,
   Loader,
   Paper,
   ScrollArea,
@@ -208,6 +209,7 @@ export function ManaPoolOrderPanel({ model }: Props) {
                       pickedKey !== undefined
                         ? !!pickedMap[selectedOrderId]?.[pickedKey]
                         : !!item.picked;
+                    const cardImageSrc = getCardImageSrc(item);
 
                     return (
                       <Paper
@@ -217,24 +219,59 @@ export function ManaPoolOrderPanel({ model }: Props) {
                         p="sm"
                       >
                         <Group align="flex-start" wrap="nowrap">
-                          <img
-                            src={getCardImageSrc(item)}
-                            alt={item.name || "Card"}
-                            width={72}
-                            height={100}
-                            style={{
-                              objectFit: "cover",
-                              borderRadius: 6,
-                              flexShrink: 0,
-                              background: "var(--mantine-color-gray-1)",
-                            }}
-                            onError={(event) => {
-                              const target = event.currentTarget;
-                              if (!target.src.endsWith("/card-placeholder.png")) {
-                                target.src = "/card-placeholder.png";
-                              }
-                            }}
-                          />
+                          <HoverCard
+                            width={312}
+                            shadow="lg"
+                            position="left"
+                            openDelay={120}
+                            closeDelay={80}
+                            withinPortal
+                          >
+                            <HoverCard.Target>
+                              <img
+                                src={cardImageSrc}
+                                alt={item.name || "Card"}
+                                width={72}
+                                height={100}
+                                style={{
+                                  objectFit: "cover",
+                                  borderRadius: 6,
+                                  flexShrink: 0,
+                                  background: "var(--mantine-color-gray-1)",
+                                  cursor: "zoom-in",
+                                }}
+                                onError={(event) => {
+                                  const target = event.currentTarget;
+                                  if (!target.src.endsWith("/card-placeholder.png")) {
+                                    target.src = "/card-placeholder.png";
+                                  }
+                                }}
+                              />
+                            </HoverCard.Target>
+                            <HoverCard.Dropdown p={8} style={{ borderRadius: 10 }}>
+                              <img
+                                src={cardImageSrc}
+                                alt={`${item.name || "Card"} enlarged`}
+                                width={294}
+                                height={410}
+                                style={{
+                                  display: "block",
+                                  width: "100%",
+                                  height: "auto",
+                                  maxHeight: 410,
+                                  objectFit: "contain",
+                                  borderRadius: 7,
+                                  background: "var(--mantine-color-gray-1)",
+                                }}
+                                onError={(event) => {
+                                  const target = event.currentTarget;
+                                  if (!target.src.endsWith("/card-placeholder.png")) {
+                                    target.src = "/card-placeholder.png";
+                                  }
+                                }}
+                              />
+                            </HoverCard.Dropdown>
+                          </HoverCard>
 
                           <Box style={{ flex: 1, minWidth: 0 }}>
                             <Text fw={600} lineClamp={2}>

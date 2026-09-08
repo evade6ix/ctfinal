@@ -4,6 +4,7 @@ import {
   testManaPoolConnection,
   getSellerOrders,
   getSellerOrderById,
+  updateSellerOrderFulfillment,
 } from "../services/manapoolClient.js";
 
 import { reconcileManaPoolOrder } from "../services/manapoolOrderReconcile.js";
@@ -87,6 +88,57 @@ router.get("/orders/:orderId", async (req, res) => {
     res.status(error.response?.status || 500).json({
       success: false,
       message: "Failed to fetch Mana Pool order",
+      error: error.response?.data || error.message,
+    });
+  }
+});
+
+// PUT /api/manapool/orders/:orderId/fulfillment
+// Update the seller order fulfillment state directly on Mana Pool.
+router.put("/orders/:orderId/fulfillment", async (req, res) => {
+  try {
+    const status = String(req.body?.status || "").trim().toLowerCase();
+
+    if (!["processing", "shipped"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Fulfillment status must be processing or shipped",
+      });
+    }
+
+    const fulfillment = { status };
+
+    for (const field of [
+      "tracking_company",
+      "tracking_number",
+      "tracking_url",
+      "in_transit_at",
+      "estimated_delivery_at",
+      "delivered_at",
+    ]) {
+      if (req.body?.[field] != null && req.body[field] !== "") {
+        fulfillment[field] = req.body[field];
+      }
+    }
+
+    const data = await updateSellerOrderFulfillment(
+      req.params.orderId,
+      fulfillment
+    );
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("❌ Failed to update Mana Pool fulfillment", {
+      orderId: req.params.orderId,
+      error: error.response?.data || error.message || error,
+    });
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: "Failed to update Mana Pool fulfillment",
       error: error.response?.data || error.message,
     });
   }

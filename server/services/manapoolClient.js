@@ -68,6 +68,14 @@ export async function getSellerOrderById(orderId) {
   });
 }
 
+export async function updateSellerOrderFulfillment(orderId, fulfillment = {}) {
+  return manapoolRequest({
+    method: "PUT",
+    url: `/seller/orders/${orderId}/fulfillment`,
+    data: fulfillment,
+  });
+}
+
 export async function searchSingleProducts(params = {}) {
   return manapoolRequest({
     method: "GET",

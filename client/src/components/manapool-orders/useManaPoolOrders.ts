@@ -45,9 +45,10 @@ function getManaPoolOrderItems(order: any) {
     asArray(order?.data?.products),
   ];
 
-  return candidates.reduce<any[]>((best, current) =>
-    current.length > best.length ? current : best
-  , []);
+  return candidates.reduce<any[]>(
+    (best, current) => (current.length > best.length ? current : best),
+    []
+  );
 }
 
 function getManaPoolSingle(item: any) {
@@ -380,11 +381,13 @@ export function useManaPoolOrders() {
 
           if (!allocation && itemScryfallId) {
             const bucket = byScryfallId.get(itemScryfallId) || [];
-            allocation =
-              bucket
-                .map((candidate) => takeAllocation(candidate))
-                .find((candidate): candidate is OrderAllocation => !!candidate) ||
-              null;
+            for (const candidate of bucket) {
+              const taken = takeAllocation(candidate);
+              if (taken) {
+                allocation = taken;
+                break;
+              }
+            }
           }
 
           const single = getManaPoolSingle(item);
@@ -420,6 +423,15 @@ export function useManaPoolOrders() {
               item.finish ||
               ""
           ).toUpperCase();
+          const rawItemIsFoil =
+            ["FO", "EF", "FOIL", "ETCHED"].includes(finishId) ||
+            Boolean(
+              item.is_foil ||
+                item.isFoil ||
+                item.foil ||
+                item.product?.is_foil ||
+                item.product?.foil
+            );
 
           return {
             id: numericOrderItemId,
@@ -490,14 +502,7 @@ export function useManaPoolOrders() {
             isFoil:
               allocation?.isFoil ??
               allocation?.inventoryItem?.isFoil ??
-              ["FO", "EF", "FOIL", "ETCHED"].includes(finishId) ||
-              Boolean(
-                item.is_foil ||
-                  item.isFoil ||
-                  item.foil ||
-                  item.product?.is_foil ||
-                  item.product?.foil
-              ),
+              rawItemIsFoil,
             picked: !!allocation?.picked,
             pickedAt: allocation?.pickedAt || null,
             pickedBy: allocation?.pickedBy || null,

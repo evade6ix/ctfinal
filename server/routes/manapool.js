@@ -55,7 +55,18 @@ router.get("/test", async (req, res) => {
 // Pull seller orders from Mana Pool
 router.get("/orders", async (req, res) => {
   try {
-    const data = await getSellerOrders(req.query);
+    const query = { ...req.query };
+
+    // The Orders screen historically requested only 50 seller orders, then
+    // filtered shipped orders on the client. A still-open order can therefore
+    // disappear once enough newer completed orders push it past that first page.
+    // ManaPool supports up to 500 orders per request, so widen that specific
+    // active-order request while preserving the existing response shape.
+    if (String(query.limit || "") === "50" && query.offset == null) {
+      query.limit = "500";
+    }
+
+    const data = await getSellerOrders(query);
 
     // ManaPool remains the source of truth for order status. Once an order is
     // shipped, its local picking/allocation records are no longer needed.

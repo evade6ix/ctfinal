@@ -9,20 +9,28 @@ import type {
 export const HIDDEN_REFUNDED_STORAGE_KEY = "manapool_hidden_refunded_order_ids_v1";
 
 export function getManaPoolLineRawId(it: any, index: number) {
-  return (
+  const raw =
     it?.id ??
     it?.order_item_id ??
     it?.order_line_id ??
     it?.line_id ??
     it?.uuid ??
     it?.seller_order_item_id ??
-    `line-${index + 1}`
-  );
+    null;
+
+  const rawStr = raw == null ? "" : String(raw).trim();
+
+  // Keep this identical to the backend ManaPool reconciler. ManaPool can
+  // return 0 / "0" as a repeated, unusable line id, so those lines are
+  // identified by their visible position instead.
+  return rawStr !== "" && rawStr !== "0" ? rawStr : `line-${index + 1}`;
 }
 
-export function getManaPoolNumericOrderItemId(it: any, index: number) {
-  const numeric = Number(getManaPoolLineRawId(it, index));
-  return Number.isFinite(numeric) ? numeric : index + 1;
+export function getManaPoolNumericOrderItemId(_it: any, index: number) {
+  // The backend reconciler intentionally stores orderItemId as 1-based line
+  // position. Using ManaPool's raw id here breaks allocation lookup whenever
+  // that raw id is numeric or unstable.
+  return index + 1;
 }
 
 export function getManaPoolMarketplaceOrderItemId(it: any, index: number) {

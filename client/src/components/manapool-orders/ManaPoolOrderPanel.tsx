@@ -5,13 +5,13 @@ import {
   Button,
   Divider,
   Group,
-  HoverCard,
   Loader,
   Paper,
   ScrollArea,
   Stack,
   Text,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import {
   IconCheck,
@@ -34,6 +34,74 @@ import {
 type Props = {
   model: ManaPoolOrdersModel;
 };
+
+type CardImagePreviewProps = {
+  src: string;
+  alt: string;
+};
+
+function handleCardImageError(event: React.SyntheticEvent<HTMLImageElement>) {
+  const target = event.currentTarget;
+  if (!target.src.endsWith("/card-placeholder.png")) {
+    target.src = "/card-placeholder.png";
+  }
+}
+
+function CardImagePreview({ src, alt }: CardImagePreviewProps) {
+  return (
+    <Tooltip
+      position="left"
+      openDelay={80}
+      closeDelay={60}
+      withinPortal
+      offset={14}
+      label={
+        <img
+          src={src}
+          alt={`${alt} enlarged`}
+          width={294}
+          height={410}
+          style={{
+            display: "block",
+            width: 294,
+            height: "auto",
+            maxHeight: 410,
+            objectFit: "contain",
+            borderRadius: 8,
+            background: "var(--mantine-color-gray-1)",
+          }}
+          onError={handleCardImageError}
+        />
+      }
+      styles={{
+        tooltip: {
+          padding: 8,
+          background: "#ffffff",
+          border: "1px solid var(--mantine-color-gray-3)",
+          borderRadius: 10,
+          boxShadow: "0 18px 45px rgba(0, 0, 0, 0.22)",
+          maxWidth: 312,
+        },
+      }}
+    >
+      <img
+        src={src}
+        alt={alt}
+        width={72}
+        height={100}
+        style={{
+          display: "block",
+          objectFit: "cover",
+          borderRadius: 6,
+          flexShrink: 0,
+          background: "var(--mantine-color-gray-1)",
+          cursor: "zoom-in",
+        }}
+        onError={handleCardImageError}
+      />
+    </Tooltip>
+  );
+}
 
 export function ManaPoolOrderPanel({ model }: Props) {
   const {
@@ -219,59 +287,10 @@ export function ManaPoolOrderPanel({ model }: Props) {
                         p="sm"
                       >
                         <Group align="flex-start" wrap="nowrap">
-                          <HoverCard
-                            width={312}
-                            shadow="lg"
-                            position="left"
-                            openDelay={120}
-                            closeDelay={80}
-                            withinPortal
-                          >
-                            <HoverCard.Target>
-                              <img
-                                src={cardImageSrc}
-                                alt={item.name || "Card"}
-                                width={72}
-                                height={100}
-                                style={{
-                                  objectFit: "cover",
-                                  borderRadius: 6,
-                                  flexShrink: 0,
-                                  background: "var(--mantine-color-gray-1)",
-                                  cursor: "zoom-in",
-                                }}
-                                onError={(event) => {
-                                  const target = event.currentTarget;
-                                  if (!target.src.endsWith("/card-placeholder.png")) {
-                                    target.src = "/card-placeholder.png";
-                                  }
-                                }}
-                              />
-                            </HoverCard.Target>
-                            <HoverCard.Dropdown p={8} style={{ borderRadius: 10 }}>
-                              <img
-                                src={cardImageSrc}
-                                alt={`${item.name || "Card"} enlarged`}
-                                width={294}
-                                height={410}
-                                style={{
-                                  display: "block",
-                                  width: "100%",
-                                  height: "auto",
-                                  maxHeight: 410,
-                                  objectFit: "contain",
-                                  borderRadius: 7,
-                                  background: "var(--mantine-color-gray-1)",
-                                }}
-                                onError={(event) => {
-                                  const target = event.currentTarget;
-                                  if (!target.src.endsWith("/card-placeholder.png")) {
-                                    target.src = "/card-placeholder.png";
-                                  }
-                                }}
-                              />
-                            </HoverCard.Dropdown>
-                          </HoverCard>
+                          <CardImagePreview
+                            src={cardImageSrc}
+                            alt={item.name || "Card"}
+                          />
 
                           <Box style={{ flex: 1, minWidth: 0 }}>
                             <Text fw={600} lineClamp={2}>
